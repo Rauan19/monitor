@@ -1,0 +1,17 @@
+{
+  "name": "monitor-mikrotik-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monitor read-only de desconexões PPPoE no MikroTik CCR",
+  "scripts": {
+    "install:all": "npm install --prefix server --no-fund --no-audit && npm install --prefix web --no-fund --no-audit",
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm run dev --prefix server\" \"npm run dev --prefix web\"",
+    "dev:server": "npm run dev --prefix server",
+    "dev:web": "npm run dev --prefix web",
+    "build": "npm run build --prefix web",
+    "start": "npm start --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
