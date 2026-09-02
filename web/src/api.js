@@ -134,4 +134,8 @@ export const api = {
   exportEventsUrl: (hours = 168, type = '') =>
     `/api/export/events.csv?hours=${hours}${type ? `&type=${type}` : ''}`,
   reportUrl: (days = 30) => `/api/report/monthly?days=${days}`,
+  registerPushToken: (token) =>
+    request('/api/push/register', { method: 'POST', body: JSON.stringify({ token, platform: 'web' }) }),
+  unregisterPushToken: (token) =>
+    request('/api/push/unregister', { method: 'POST', body: JSON.stringify({ token }) }),
 };

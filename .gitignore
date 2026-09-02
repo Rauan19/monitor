@@ -9,3 +9,8 @@ dist/
 Thumbs.db
 server/data/
 *.log
+
+# Firebase (push notifications)
+google-services.json
+*firebase-adminsdk*.json
+*service-account*.json

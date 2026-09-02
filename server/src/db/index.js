@@ -633,7 +633,7 @@ export function unregisterPushToken(token) {
 
 export function listPushTokens() {
   const database = getDb();
-  return database.prepare(`SELECT token FROM push_tokens`).all().map((r) => r.token);
+  return database.prepare(`SELECT token, platform FROM push_tokens`).all();
 }
 
 export function removePushTokens(tokens) {

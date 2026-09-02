@@ -6,6 +6,7 @@ import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import 'leaflet.markercluster';
 import { api } from './api';
 import Login from './Login';
+import { disableWebPush, enableWebPush, isWebPushEnabled, isWebPushSupported } from './push';
 
 const PAGE_SIZE = 20;
 
@@ -208,6 +209,21 @@ function IconChevron({ dir = 'left' }) {
   );
 }
 
+function IconBell() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M6 9a6 6 0 1112 0c0 4.5 1.5 6 2 7H4c.5-1 2-2.5 2-7z"
+        fill="none"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M9.5 19a2.5 2.5 0 005 0" fill="none" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function IconLogout() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -327,6 +343,10 @@ export default function App() {
   const [clientDetailError, setClientDetailError] = useState('');
   const [mapPoints, setMapPoints] = useState([]);
   const [mapError, setMapError] = useState('');
+  const [pushEnabled, setPushEnabled] = useState(() => isWebPushEnabled());
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState('');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   function metaOf(res) {
     return {
@@ -620,6 +640,26 @@ export default function App() {
     setUser(null);
   }
 
+  async function handleTogglePush() {
+    setPushBusy(true);
+    setPushError('');
+    try {
+      if (pushEnabled) {
+        await disableWebPush();
+        setPushEnabled(false);
+      } else {
+        const res = await enableWebPush();
+        if (res.ok) {
+          setPushEnabled(true);
+        } else {
+          setPushError(res.error || 'Falha ao ativar notificações');
+        }
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
   if (!authChecked) {
     return <div className="login-shell" />;
   }
@@ -670,11 +710,36 @@ export default function App() {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
+      <header className="mobile-topbar">
+        <button
+          type="button"
+          className="mobile-menu-btn"
+          aria-label="Abrir menu"
+          onClick={() => setMobileMenuOpen(true)}
+        >
+          <IconMenu />
+        </button>
+        <span className="mobile-topbar-title">{currentTab?.label}</span>
+        <span className={`mobile-topbar-dot ${connected ? 'ok' : 'bad'}`} aria-hidden="true" />
+      </header>
+
+      {mobileMenuOpen && (
+        <div className="sidebar-backdrop" onClick={() => setMobileMenuOpen(false)} />
+      )}
+
+      <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`}>
         <div className="brand-block">
-          <h1>Monitor</h1>
+          <h1>Monitor Zcnet</h1>
           <p>MikroTik PPPoE</p>
         </div>
+        <button
+          type="button"
+          className="sidebar-close"
+          aria-label="Fechar menu"
+          onClick={() => setMobileMenuOpen(false)}
+        >
+          <IconClose />
+        </button>
 
         <nav className="side-nav" aria-label="Seções">
           {TABS.map((item) => {
@@ -684,7 +749,10 @@ export default function App() {
                 key={item.id}
                 type="button"
                 className={`tab-${item.id} ${tab === item.id ? 'active' : ''}`}
-                onClick={() => setTab(item.id)}
+                onClick={() => {
+                  setTab(item.id);
+                  setMobileMenuOpen(false);
+                }}
               >
                 <span className="nav-icon">
                   <Icon />
@@ -706,6 +774,20 @@ export default function App() {
             <span className="mono">{status ? (connected ? 'Sincronizando' : 'Sem resposta do CCR') : 'Aguardando'}</span>
           </div>
         </div>
+
+        {isWebPushSupported() && (
+          <button
+            type="button"
+            className={`push-btn ${pushEnabled ? 'active' : ''}`}
+            onClick={handleTogglePush}
+            disabled={pushBusy}
+            title={pushError || undefined}
+          >
+            <IconBell />
+            <span>{pushBusy ? 'Aguarde…' : pushEnabled ? 'Notificações ativas' : 'Ativar notificações'}</span>
+          </button>
+        )}
+        {pushError && <span className="push-error">{pushError}</span>}
 
         <button type="button" className="logout-btn" onClick={handleLogout}>
           <IconLogout />
@@ -943,14 +1025,14 @@ export default function App() {
         </div>
       </main>
 
-      <nav className="mobile-nav" aria-label="Seções mobile">
-        {TABS.map((item) => {
+      <nav className="mobile-nav" aria-label="Navegação rápida mobile">
+        {TABS.slice(0, 4).map((item) => {
           const Icon = TAB_ICONS[item.id];
           return (
             <button
               key={item.id}
               type="button"
-              className={`tab-${item.id} ${tab === item.id ? 'active' : ''}`}
+              className={`tab-${item.id} ${tab === item.id && !mobileMenuOpen ? 'active' : ''}`}
               onClick={() => setTab(item.id)}
             >
               <Icon />
@@ -958,6 +1040,14 @@ export default function App() {
             </button>
           );
         })}
+        <button
+          type="button"
+          className={`mobile-nav-more ${mobileMenuOpen ? 'active' : ''}`}
+          onClick={() => setMobileMenuOpen(true)}
+        >
+          <IconMore />
+          <span>Mais</span>
+        </button>
       </nav>
 
       {detailSessionKey && (
@@ -969,6 +1059,24 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+function IconMore() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="19" cy="12" r="1.6" />
+    </svg>
+  );
+}
+
+function IconMenu() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h16M4 12h16M4 17h16" fill="none" strokeWidth="2" strokeLinecap="round" />
+    </svg>
   );
 }
 
