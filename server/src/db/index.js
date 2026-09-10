@@ -235,6 +235,37 @@ export function setPort(sessionKey, port) {
     .get(sessionKey);
 }
 
+export function setPortBulk(sessionKeys, port) {
+  const database = getDb();
+  const n = Number(port);
+  const clean = Number.isInteger(n) && n >= 1 && n <= 8 ? n : null;
+  const stmt = database.prepare(`UPDATE sessions SET ont_port = ? WHERE session_key = ?`);
+  const tx = database.transaction((keys) => {
+    for (const key of keys) stmt.run(clean, key);
+  });
+  tx(sessionKeys);
+  return { updated: sessionKeys.length, port: clean };
+}
+
+/**
+ * Clientes que caíram desde um instante — usado no modo "calibração de porta"
+ * pra listar quem desconectou durante a janela de teste.
+ */
+export function listDisconnectedSince(isoTimestamp) {
+  const database = getDb();
+  return database
+    .prepare(
+      `SELECT DISTINCT e.session_key, s.name, s.alias, s.address, s.caller_id, s.ont_port,
+              MIN(e.created_at) AS disconnected_at
+       FROM events e
+       JOIN sessions s ON s.session_key = e.session_key
+       WHERE e.event_type = 'disconnected' AND e.created_at >= ?
+       GROUP BY e.session_key
+       ORDER BY disconnected_at ASC`
+    )
+    .all(isoTimestamp);
+}
+
 export function sessionKey({ name, callerId, address }) {
   const mac = (callerId || '').trim().toLowerCase();
   const ip = (address || '').trim();

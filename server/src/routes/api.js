@@ -13,6 +13,7 @@ import {
   listBandwidthHistory,
   listDisconnected,
   listDisconnectedForExport,
+  listDisconnectedSince,
   listEvents,
   listEventsForExport,
   listEventsForSession,
@@ -26,10 +27,12 @@ import {
   setAlias,
   setLocation,
   setPort,
+  setPortBulk,
   unregisterPushToken,
 } from '../db/index.js';
 import { config } from '../config.js';
 import { getAllBandwidth } from '../poller/bandwidth.js';
+import { getActiveCalibration, startCalibration, stopCalibration } from '../portCalibration.js';
 import { mikrotik } from '../mikrotik/client.js';
 
 function withBandwidth(result) {
@@ -159,6 +162,43 @@ apiRouter.post('/clients/remove', (req, res) => {
     return res.status(400).json({ error: result.error });
   }
   res.json({ ok: true });
+});
+
+// --- Calibração de porta: pausa alerta de queda em massa e permite aplicar
+// a porta em lote pra quem cair durante o teste manual de uma porta ---
+
+apiRouter.post('/port-calibration/start', (req, res) => {
+  const { port } = req.body || {};
+  const n = Number(port);
+  if (!Number.isInteger(n) || n < 1 || n > 8) {
+    return res.status(400).json({ error: 'Porta deve ser um número entre 1 e 8' });
+  }
+  const active = startCalibration(n);
+  res.json({ ok: true, active });
+});
+
+apiRouter.get('/port-calibration/status', (_req, res) => {
+  const active = getActiveCalibration();
+  if (!active) return res.json({ active: null, clients: [] });
+  const clients = listDisconnectedSince(active.startedAt);
+  res.json({ active, clients });
+});
+
+apiRouter.post('/port-calibration/apply', (_req, res) => {
+  const active = getActiveCalibration();
+  if (!active) return res.status(400).json({ error: 'Nenhuma calibração ativa' });
+  const clients = listDisconnectedSince(active.startedAt);
+  const result = setPortBulk(
+    clients.map((c) => c.session_key),
+    active.port
+  );
+  stopCalibration();
+  res.json({ ok: true, ...result });
+});
+
+apiRouter.post('/port-calibration/cancel', (_req, res) => {
+  const active = stopCalibration();
+  res.json({ ok: true, wasActive: !!active });
 });
 
 // --- Saúde do CCR ---

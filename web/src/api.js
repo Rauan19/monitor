@@ -138,4 +138,9 @@ export const api = {
     request('/api/push/register', { method: 'POST', body: JSON.stringify({ token, platform: 'web' }) }),
   unregisterPushToken: (token) =>
     request('/api/push/unregister', { method: 'POST', body: JSON.stringify({ token }) }),
+  startPortCalibration: (port) =>
+    request('/api/port-calibration/start', { method: 'POST', body: JSON.stringify({ port }) }),
+  portCalibrationStatus: () => request('/api/port-calibration/status'),
+  applyPortCalibration: () => request('/api/port-calibration/apply', { method: 'POST' }),
+  cancelPortCalibration: () => request('/api/port-calibration/cancel', { method: 'POST' }),
 };

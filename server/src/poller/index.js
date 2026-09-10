@@ -4,6 +4,7 @@ import { getRecentDisconnectGroups, updatePollStatus, upsertOnlineSessions } fro
 import { updateBandwidth } from './bandwidth.js';
 import { notifyWebhook } from '../notify.js';
 import { sendPushToAll } from '../push.js';
+import { getActiveCalibration } from '../portCalibration.js';
 
 let timer = null;
 let running = false;
@@ -73,7 +74,7 @@ async function tick() {
       });
     }
 
-    if (result.newlyDisconnected.length) {
+    if (result.newlyDisconnected.length && !getActiveCalibration()) {
       try {
         checkCorrelatedOutages();
       } catch (err) {

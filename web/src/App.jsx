@@ -209,6 +209,20 @@ function IconChevron({ dir = 'left' }) {
   );
 }
 
+function IconWrench() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M14.7 6.3a4 4 0 00-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 005.4-5.4l-2.5 2.5-2-2 2.5-2.5z"
+        fill="none"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function IconBell() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -347,6 +361,10 @@ export default function App() {
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [calibration, setCalibration] = useState(null);
+  const [calibrationClients, setCalibrationClients] = useState([]);
+  const [calibrationBusy, setCalibrationBusy] = useState(false);
+  const [pickingPort, setPickingPort] = useState(false);
 
   function metaOf(res) {
     return {
@@ -359,7 +377,7 @@ export default function App() {
 
   async function refresh() {
     try {
-      const [dash, st, all, on, off, ev] = await Promise.all([
+      const [dash, st, all, on, off, ev, calib] = await Promise.all([
         api.dashboard(),
         api.status(),
         api.all({ q: query, port: portFilter, page: pageAll, pageSize: PAGE_SIZE }),
@@ -372,9 +390,12 @@ export default function App() {
           page: pageHistory,
           pageSize: PAGE_SIZE,
         }),
+        api.portCalibrationStatus(),
       ]);
       setDashboard(dash);
       setStatus(st);
+      setCalibration(calib.active || null);
+      setCalibrationClients(calib.clients || []);
       setAllRows(all.items || []);
       setOnline(on.items || []);
       setDisconnected(off.items || []);
@@ -660,6 +681,55 @@ export default function App() {
     }
   }
 
+  async function handleStartCalibration(port) {
+    setCalibrationBusy(true);
+    try {
+      const res = await api.startPortCalibration(port);
+      setCalibration(res.active);
+      setCalibrationClients([]);
+      setPickingPort(false);
+    } catch (err) {
+      window.alert(err.message || 'Não foi possível iniciar');
+    } finally {
+      setCalibrationBusy(false);
+    }
+  }
+
+  async function handleApplyCalibration() {
+    if (!calibration) return;
+    const n = calibrationClients.length;
+    if (
+      !window.confirm(
+        `Aplicar Porta ${calibration.port} a ${n} cliente${n === 1 ? '' : 's'} e encerrar a calibração?`
+      )
+    ) {
+      return;
+    }
+    setCalibrationBusy(true);
+    try {
+      await api.applyPortCalibration();
+      setCalibration(null);
+      setCalibrationClients([]);
+      refresh();
+    } catch (err) {
+      window.alert(err.message || 'Falha ao aplicar');
+    } finally {
+      setCalibrationBusy(false);
+    }
+  }
+
+  async function handleCancelCalibration() {
+    if (!window.confirm('Cancelar a calibração sem aplicar nenhuma porta?')) return;
+    setCalibrationBusy(true);
+    try {
+      await api.cancelPortCalibration();
+      setCalibration(null);
+      setCalibrationClients([]);
+    } finally {
+      setCalibrationBusy(false);
+    }
+  }
+
   if (!authChecked) {
     return <div className="login-shell" />;
   }
@@ -775,6 +845,36 @@ export default function App() {
           </div>
         </div>
 
+        {!calibration && (
+          <div className="calib-trigger">
+            <button
+              type="button"
+              className={`calib-btn ${pickingPort ? 'active' : ''}`}
+              onClick={() => setPickingPort((v) => !v)}
+            >
+              <IconWrench />
+              <span>Testar porta</span>
+            </button>
+            {pickingPort && (
+              <div className="calib-port-picker">
+                <span>Vai desligar qual porta?</span>
+                <div className="calib-port-grid">
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      disabled={calibrationBusy}
+                      onClick={() => handleStartCalibration(p)}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {isWebPushSupported() && (
           <button
             type="button"
@@ -804,6 +904,50 @@ export default function App() {
             </p>
           </div>
         </header>
+
+        {calibration && (
+          <div className="calib-banner">
+            <div className="calib-banner-head">
+              <IconWrench />
+              <div>
+                <strong>Testando Porta {calibration.port}</strong>
+                <span>
+                  Pode desligar a porta agora — {calibrationClients.length} cliente
+                  {calibrationClients.length === 1 ? ' caiu' : 's caíram'} desde o início
+                </span>
+              </div>
+            </div>
+            {calibrationClients.length > 0 && (
+              <ul className="calib-client-list">
+                {calibrationClients.map((c) => (
+                  <li key={c.session_key}>
+                    <span>{c.alias || c.name}</span>
+                    <span className="mono">{c.address || '—'}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="calib-banner-actions">
+              <button
+                type="button"
+                className="calib-apply"
+                disabled={calibrationBusy || calibrationClients.length === 0}
+                onClick={handleApplyCalibration}
+              >
+                Aplicar Porta {calibration.port} a {calibrationClients.length}{' '}
+                {calibrationClients.length === 1 ? 'cliente' : 'clientes'} e finalizar
+              </button>
+              <button
+                type="button"
+                className="calib-cancel"
+                disabled={calibrationBusy}
+                onClick={handleCancelCalibration}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
 
         <section className="metric-row" aria-label="Resumo">
           <article className="metric metric-ok">
