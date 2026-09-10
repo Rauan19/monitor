@@ -1,0 +1,172 @@
+import { useCallback, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
+import { colors, radius } from '../theme';
+import { api } from '../api';
+import { Badge, ErrorBanner, KeyValue, LoadingState } from '../components/common';
+import PrimaryButton from '../components/PrimaryButton';
+import MiniBars from '../components/MiniBars';
+import { formatBps, formatDate } from '../format';
+
+export default function ClientDetailScreen() {
+  const route = useRoute();
+  const navigation = useNavigation();
+  const { sessionKey } = route.params;
+
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const [alias, setAlias] = useState('');
+  const [region, setRegion] = useState('');
+  const [city, setCity] = useState('');
+  const [street, setStreet] = useState('');
+  const [neighborhood, setNeighborhood] = useState('');
+  const [port, setPort] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api.clientDetail(sessionKey);
+      setData(res);
+      const s = res.session;
+      setAlias(s.alias || '');
+      setRegion(s.loc_region || '');
+      setCity(s.loc_city || '');
+      setStreet(s.loc_street || '');
+      setNeighborhood(s.loc_neighborhood || '');
+      setPort(s.ont_port ? String(s.ont_port) : '');
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Falha ao carregar cliente');
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionKey]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await api.setAlias(sessionKey, alias);
+      await api.setLocation(sessionKey, { region, city, street, neighborhood });
+      await api.setPort(sessionKey, port ? Number(port) : null);
+      await load();
+      Alert.alert('Salvo', 'Dados do cliente atualizados.');
+    } catch (err) {
+      Alert.alert('Erro', err.message || 'Falha ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRemove() {
+    Alert.alert('Remover cliente', 'Remover da lista? Ele só volta a aparecer se reconectar.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Remover',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await api.removeClient(sessionKey);
+            navigation.goBack();
+          } catch (err) {
+            Alert.alert('Erro', err.message || 'Não foi possível remover');
+          }
+        },
+      },
+    ]);
+  }
+
+  if (loading) return <LoadingState />;
+
+  const session = data?.session;
+  const online = session ? Number(session.is_online) === 1 : false;
+  const bwData = (data?.bandwidth || []).map((b) => ({ value: (b.down_bps || 0) + (b.up_bps || 0) }));
+
+  return (
+    <ScrollView style={styles.screen} contentContainerStyle={{ padding: 12 }}>
+      <ErrorBanner message={error} />
+      {session && (
+        <>
+          <View style={styles.headRow}>
+            <Badge label={online ? 'Online' : 'Offline'} tone={online ? 'ok' : 'warn'} />
+            {data.sla && <Text style={styles.uptime}>Uptime 30d: {data.sla.uptimePct}%</Text>}
+          </View>
+
+          <View style={styles.card}>
+            <KeyValue label="Usuário PPP" value={session.name} />
+            <KeyValue label="IP" value={session.address} />
+            <KeyValue label="MAC" value={session.caller_id} />
+            <KeyValue label="Perfil" value={session.profile} />
+            <KeyValue label="Uptime PPP" value={session.uptime} />
+            {data.live && (
+              <KeyValue label="Velocidade agora" value={`${formatBps(data.live.downBps)} / ${formatBps(data.live.upBps)}`} />
+            )}
+          </View>
+
+          <Text style={styles.sectionTitle}>Banda (24h)</Text>
+          <View style={styles.card}>
+            <MiniBars data={bwData} color={colors.cyan} />
+          </View>
+
+          <Text style={styles.sectionTitle}>Editar cliente</Text>
+          <View style={styles.card}>
+            <Text style={styles.label}>Apelido</Text>
+            <TextInput style={styles.input} value={alias} onChangeText={setAlias} placeholder={session.name} placeholderTextColor={colors.inkFaint} />
+
+            <Text style={styles.label}>Região</Text>
+            <TextInput style={styles.input} value={region} onChangeText={setRegion} placeholderTextColor={colors.inkFaint} />
+
+            <Text style={styles.label}>Bairro</Text>
+            <TextInput style={styles.input} value={neighborhood} onChangeText={setNeighborhood} placeholderTextColor={colors.inkFaint} />
+
+            <Text style={styles.label}>Cidade</Text>
+            <TextInput style={styles.input} value={city} onChangeText={setCity} placeholderTextColor={colors.inkFaint} />
+
+            <Text style={styles.label}>Rua</Text>
+            <TextInput style={styles.input} value={street} onChangeText={setStreet} placeholderTextColor={colors.inkFaint} />
+
+            <Text style={styles.label}>Porta (1-8)</Text>
+            <TextInput style={styles.input} value={port} onChangeText={setPort} keyboardType="number-pad" placeholderTextColor={colors.inkFaint} />
+
+            <PrimaryButton label={saving ? 'Salvando…' : 'Salvar'} onPress={handleSave} disabled={saving} />
+            {!online && <PrimaryButton label="Remover cliente" onPress={handleRemove} tone="danger" />}
+          </View>
+
+          <Text style={styles.sectionTitle}>Eventos recentes</Text>
+          <View style={styles.card}>
+            {(data.events || []).length ? (
+              data.events.map((ev) => (
+                <View key={ev.id} style={styles.eventRow}>
+                  <Badge label={ev.event_type === 'disconnected' ? 'Caiu' : 'Conectou'} tone={ev.event_type === 'disconnected' ? 'warn' : 'ok'} />
+                  <Text style={styles.eventDate}>{formatDate(ev.created_at)}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.muted}>Sem eventos registrados ainda.</Text>
+            )}
+          </View>
+        </>
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.bg },
+  headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  uptime: { color: colors.inkSoft, fontSize: 12, fontWeight: '650' },
+  card: { backgroundColor: colors.surface2, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, padding: 14, marginBottom: 14 },
+  sectionTitle: { color: colors.inkSoft, fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 },
+  label: { color: colors.inkFaint, fontSize: 11, fontWeight: '650', marginTop: 8, marginBottom: 4 },
+  input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 9, color: colors.ink, fontSize: 13 },
+  eventRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.line },
+  eventDate: { color: colors.inkFaint, fontSize: 12 },
+  muted: { color: colors.inkFaint, fontSize: 13 },
+});

@@ -1,24 +1,52 @@
 {
   "expo": {
-    "name": "app",
-    "slug": "app",
+    "name": "MonitorZcnet",
+    "slug": "monitorzcnet",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "ios": {
-      "supportsTablet": true
+    "userInterfaceStyle": "dark",
+    "androidStatusBar": {
+      "barStyle": "light-content",
+      "backgroundColor": "#09090b"
     },
     "android": {
+      "package": "com.zcnet.monitorzcnet",
+      "googleServicesFile": "./google-services.json",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS"
+      ],
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#09090b",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       }
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#5b8def"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#09090b",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 220,
+          "resizeMode": "contain"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9476073c-8757-47ea-b3f8-973426b474c5"
+      }
+    },
+    "owner": "rauh2020"
   }
 }
