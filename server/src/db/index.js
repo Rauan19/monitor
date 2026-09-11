@@ -98,6 +98,20 @@ export function getDb() {
       created_at TEXT NOT NULL,
       last_seen_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS olts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      port_count INTEGER NOT NULL DEFAULT 8,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS port_labels (
+      olt_id INTEGER NOT NULL DEFAULT 0,
+      port INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      PRIMARY KEY (olt_id, port)
+    );
   `);
 
   const hasProfile = db
@@ -135,6 +149,29 @@ export function getDb() {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_ont_port ON sessions(ont_port)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_events_session_time ON events(session_key, created_at)`);
 
+  const hasOltId = db
+    .prepare(`SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'olt_id'`)
+    .get();
+  if (!hasOltId) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN olt_id INTEGER`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_olt_id ON sessions(olt_id)`);
+
+  const portLabelsHasOltId = db
+    .prepare(`SELECT 1 FROM pragma_table_info('port_labels') WHERE name = 'olt_id'`)
+    .get();
+  if (!portLabelsHasOltId) {
+    db.exec(`DROP TABLE IF EXISTS port_labels`);
+    db.exec(`
+      CREATE TABLE port_labels (
+        olt_id INTEGER NOT NULL DEFAULT 0,
+        port INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        PRIMARY KEY (olt_id, port)
+      )
+    `);
+  }
+
   const geoColumns = ['lat', 'lng'];
   for (const col of geoColumns) {
     const has = db
@@ -146,6 +183,126 @@ export function getDb() {
   }
 
   return db;
+}
+
+export function listOlts() {
+  const database = getDb();
+  return database.prepare(`SELECT id, name, port_count FROM olts ORDER BY name COLLATE NOCASE`).all();
+}
+
+export function getOlt(id) {
+  if (!id) return null;
+  const database = getDb();
+  return database.prepare(`SELECT id, name, port_count FROM olts WHERE id = ?`).get(Number(id)) || null;
+}
+
+export function createOlt(name, portCount) {
+  const database = getDb();
+  const clean = (name || '').trim();
+  const count = Number(portCount);
+  if (!clean) return { ok: false, error: 'Nome da OLT é obrigatório' };
+  if (!Number.isInteger(count) || count < 1 || count > 128) {
+    return { ok: false, error: 'Número de portas inválido' };
+  }
+  try {
+    const info = database
+      .prepare(`INSERT INTO olts (name, port_count, created_at) VALUES (?, ?, ?)`)
+      .run(clean, count, new Date().toISOString());
+    return { ok: true, olt: { id: info.lastInsertRowid, name: clean, port_count: count } };
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE')) {
+      return { ok: false, error: 'Já existe uma OLT com esse nome' };
+    }
+    throw err;
+  }
+}
+
+export function updateOlt(id, { name, portCount } = {}) {
+  const database = getDb();
+  const n = Number(id);
+  const existing = database.prepare(`SELECT * FROM olts WHERE id = ?`).get(n);
+  if (!existing) return { ok: false, error: 'OLT não encontrada' };
+  const clean = name !== undefined ? (name || '').trim() : existing.name;
+  const count = portCount !== undefined ? Number(portCount) : existing.port_count;
+  if (!clean) return { ok: false, error: 'Nome da OLT é obrigatório' };
+  if (!Number.isInteger(count) || count < 1 || count > 128) {
+    return { ok: false, error: 'Número de portas inválido' };
+  }
+  try {
+    database.prepare(`UPDATE olts SET name = ?, port_count = ? WHERE id = ?`).run(clean, count, n);
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE')) {
+      return { ok: false, error: 'Já existe uma OLT com esse nome' };
+    }
+    throw err;
+  }
+  database.prepare(`UPDATE sessions SET ont_port = NULL WHERE olt_id = ? AND ont_port > ?`).run(n, count);
+  database.prepare(`DELETE FROM port_labels WHERE olt_id = ? AND port > ?`).run(n, count);
+  return { ok: true, olt: { id: n, name: clean, port_count: count } };
+}
+
+export function deleteOlt(id) {
+  const database = getDb();
+  const n = Number(id);
+  const tx = database.transaction((oltId) => {
+    database.prepare(`UPDATE sessions SET olt_id = NULL, ont_port = NULL WHERE olt_id = ?`).run(oltId);
+    database.prepare(`DELETE FROM port_labels WHERE olt_id = ?`).run(oltId);
+    database.prepare(`DELETE FROM olts WHERE id = ?`).run(oltId);
+  });
+  tx(n);
+  return { ok: true };
+}
+
+export function setClientOlt(sessionKey, oltId) {
+  const database = getDb();
+  const id = oltId ? Number(oltId) : null;
+  if (id !== null) {
+    const olt = database.prepare(`SELECT port_count FROM olts WHERE id = ?`).get(id);
+    if (!olt) return { ok: false, error: 'OLT não encontrada' };
+    database.prepare(`UPDATE sessions SET olt_id = ? WHERE session_key = ?`).run(id, sessionKey);
+    database
+      .prepare(`UPDATE sessions SET ont_port = NULL WHERE session_key = ? AND ont_port > ?`)
+      .run(sessionKey, olt.port_count);
+  } else {
+    database.prepare(`UPDATE sessions SET olt_id = NULL WHERE session_key = ?`).run(sessionKey);
+  }
+  return { ok: true, oltId: id };
+}
+
+export function listPortLabels(oltId = 0) {
+  const database = getDb();
+  const id = oltId || 0;
+  const rows = database.prepare(`SELECT port, label FROM port_labels WHERE olt_id = ? ORDER BY port`).all(id);
+  const map = {};
+  for (const row of rows) map[row.port] = row.label;
+  return map;
+}
+
+export function setPortLabel(oltId, port, label) {
+  const database = getDb();
+  const id = oltId ? Number(oltId) : 0;
+  let maxPort = 8;
+  if (id) {
+    const olt = database.prepare(`SELECT port_count FROM olts WHERE id = ?`).get(id);
+    if (!olt) return { ok: false, error: 'OLT não encontrada' };
+    maxPort = olt.port_count;
+  }
+  const n = Number(port);
+  if (!Number.isInteger(n) || n < 1 || n > maxPort) {
+    return { ok: false, error: 'Porta inválida' };
+  }
+  const clean = (label || '').trim();
+  if (!clean) {
+    database.prepare(`DELETE FROM port_labels WHERE olt_id = ? AND port = ?`).run(id, n);
+    return { ok: true, oltId: id, port: n, label: null };
+  }
+  database
+    .prepare(
+      `INSERT INTO port_labels (olt_id, port, label) VALUES (?, ?, ?)
+       ON CONFLICT(olt_id, port) DO UPDATE SET label = excluded.label`
+    )
+    .run(id, n, clean);
+  return { ok: true, oltId: id, port: n, label: clean };
 }
 
 export function removeSession(sessionKey) {
@@ -225,8 +382,14 @@ export function listMapPoints() {
 
 export function setPort(sessionKey, port) {
   const database = getDb();
+  const session = database.prepare(`SELECT olt_id FROM sessions WHERE session_key = ?`).get(sessionKey);
+  let maxPort = 8;
+  if (session?.olt_id) {
+    const olt = database.prepare(`SELECT port_count FROM olts WHERE id = ?`).get(session.olt_id);
+    if (olt) maxPort = olt.port_count;
+  }
   const n = Number(port);
-  const clean = Number.isInteger(n) && n >= 1 && n <= 8 ? n : null;
+  const clean = Number.isInteger(n) && n >= 1 && n <= maxPort ? n : null;
   database
     .prepare(`UPDATE sessions SET ont_port = ? WHERE session_key = ?`)
     .run(clean, sessionKey);
@@ -235,16 +398,22 @@ export function setPort(sessionKey, port) {
     .get(sessionKey);
 }
 
-export function setPortBulk(sessionKeys, port) {
+export function setPortBulk(sessionKeys, port, oltId = null) {
   const database = getDb();
   const n = Number(port);
-  const clean = Number.isInteger(n) && n >= 1 && n <= 8 ? n : null;
-  const stmt = database.prepare(`UPDATE sessions SET ont_port = ? WHERE session_key = ?`);
+  const clean = Number.isInteger(n) && n >= 1 && n <= 128 ? n : null;
+  const id = oltId ? Number(oltId) : null;
+  const stmt = id
+    ? database.prepare(`UPDATE sessions SET ont_port = ?, olt_id = ? WHERE session_key = ?`)
+    : database.prepare(`UPDATE sessions SET ont_port = ? WHERE session_key = ?`);
   const tx = database.transaction((keys) => {
-    for (const key of keys) stmt.run(clean, key);
+    for (const key of keys) {
+      if (id) stmt.run(clean, id, key);
+      else stmt.run(clean, key);
+    }
   });
   tx(sessionKeys);
-  return { updated: sessionKeys.length, port: clean };
+  return { updated: sessionKeys.length, port: clean, oltId: id };
 }
 
 /**
@@ -255,7 +424,7 @@ export function listDisconnectedSince(isoTimestamp) {
   const database = getDb();
   return database
     .prepare(
-      `SELECT DISTINCT e.session_key, s.name, s.alias, s.address, s.caller_id, s.ont_port,
+      `SELECT DISTINCT e.session_key, s.name, s.alias, s.address, s.caller_id, s.ont_port, s.olt_id,
               MIN(e.created_at) AS disconnected_at
        FROM events e
        JOIN sessions s ON s.session_key = e.session_key
@@ -473,7 +642,7 @@ export function listOnline({ page = 1, pageSize = 20, q = '' } = {}) {
   const items = database
     .prepare(
       `
-      SELECT session_key, name, alias, address, caller_id, service, uptime, profile, ont_port, loc_region, loc_city, loc_street, loc_neighborhood,
+      SELECT session_key, name, alias, address, caller_id, service, uptime, profile, ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
              first_seen_at, last_seen_at
       FROM sessions
       ${where}
@@ -506,7 +675,7 @@ export function listDisconnected({
     .prepare(
       `
       SELECT session_key, name, alias, address, caller_id, service, uptime, profile,
-             ont_port, loc_region, loc_city, loc_street, loc_neighborhood,
+             ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
              first_seen_at, last_seen_at, disconnected_at, is_online
       FROM sessions
       ${where}
@@ -597,7 +766,7 @@ export function listAll({
   const items = database
     .prepare(
       `
-      SELECT session_key, name, alias, address, caller_id, service, uptime, profile, ont_port, loc_region, loc_city, loc_street, loc_neighborhood,
+      SELECT session_key, name, alias, address, caller_id, service, uptime, profile, ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
              first_seen_at, last_seen_at, disconnected_at, is_online
       FROM sessions
       ${where}
@@ -624,10 +793,10 @@ export function getRecentDisconnectGroups({ minutes = 5, threshold = 3 } = {}) {
 
   const byPort = database
     .prepare(
-      `SELECT ont_port AS port, COUNT(*) AS c, GROUP_CONCAT(COALESCE(alias, name), '||') AS names
+      `SELECT olt_id, ont_port AS port, COUNT(*) AS c, GROUP_CONCAT(COALESCE(alias, name), '||') AS names
        FROM sessions
        WHERE is_online = 0 AND disconnected_at >= ? AND ont_port IS NOT NULL
-       GROUP BY ont_port HAVING COUNT(*) >= ?`
+       GROUP BY olt_id, ont_port HAVING COUNT(*) >= ?`
     )
     .all(since, threshold);
 
@@ -640,9 +809,33 @@ export function getRecentDisconnectGroups({ minutes = 5, threshold = 3 } = {}) {
     )
     .all(since, threshold);
 
+  const portTotalStmt = database.prepare(
+    `SELECT COUNT(*) AS c FROM sessions WHERE ont_port = ? AND (olt_id = ? OR (olt_id IS NULL AND ? IS NULL))`
+  );
+  const regionTotalStmt = database.prepare(`SELECT COUNT(*) AS c FROM sessions WHERE loc_region = ?`);
+
   return {
-    byPort: byPort.map((r) => ({ port: r.port, count: r.c, names: r.names.split('||') })),
-    byRegion: byRegion.map((r) => ({ region: r.region, count: r.c, names: r.names.split('||') })),
+    byPort: byPort.map((r) => {
+      const total = portTotalStmt.get(r.port, r.olt_id, r.olt_id).c || r.c;
+      return {
+        oltId: r.olt_id || null,
+        port: r.port,
+        count: r.c,
+        total,
+        percent: total ? r.c / total : 1,
+        names: r.names.split('||'),
+      };
+    }),
+    byRegion: byRegion.map((r) => {
+      const total = regionTotalStmt.get(r.region).c || r.c;
+      return {
+        region: r.region,
+        count: r.c,
+        total,
+        percent: total ? r.c / total : 1,
+        names: r.names.split('||'),
+      };
+    }),
   };
 }
 

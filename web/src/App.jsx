@@ -365,6 +365,14 @@ export default function App() {
   const [calibrationClients, setCalibrationClients] = useState([]);
   const [calibrationBusy, setCalibrationBusy] = useState(false);
   const [pickingPort, setPickingPort] = useState(false);
+  const [portLabels, setPortLabels] = useState({});
+  const [editingPortLabels, setEditingPortLabels] = useState(false);
+  const [portLabelsBusy, setPortLabelsBusy] = useState(false);
+  const [labelOltId, setLabelOltId] = useState(0);
+  const [olts, setOlts] = useState([]);
+  const [editingOlts, setEditingOlts] = useState(false);
+  const [oltsBusy, setOltsBusy] = useState(false);
+  const [pickingOltId, setPickingOltId] = useState(0);
 
   function metaOf(res) {
     return {
@@ -464,6 +472,72 @@ export default function App() {
     const id = setInterval(refresh, 5000);
     return () => clearInterval(id);
   }, [user, query, portFilter, eventType, pageAll, pageOnline, pageDisconnected, pageHistory]);
+
+  useEffect(() => {
+    if (!user) return;
+    api
+      .portLabels(labelOltId)
+      .then((res) => setPortLabels(res.labels || {}))
+      .catch(() => {});
+  }, [user, labelOltId]);
+
+  useEffect(() => {
+    if (!user) return;
+    api
+      .listOlts()
+      .then((res) => setOlts(res.olts || []))
+      .catch(() => {});
+  }, [user]);
+
+  function oltPortCount(oltId) {
+    const olt = olts.find((o) => o.id === Number(oltId));
+    return olt ? olt.port_count : 8;
+  }
+
+  async function handleSetPortLabel(port, label) {
+    setPortLabelsBusy(true);
+    try {
+      const res = await api.setPortLabel(labelOltId, port, label);
+      setPortLabels((prev) => {
+        const next = { ...prev };
+        if (res.label) next[port] = res.label;
+        else delete next[port];
+        return next;
+      });
+    } finally {
+      setPortLabelsBusy(false);
+    }
+  }
+
+  async function handleCreateOlt(name, portCount) {
+    setOltsBusy(true);
+    try {
+      const res = await api.createOlt(name, portCount);
+      if (res.ok) setOlts((prev) => [...prev, res.olt].sort((a, b) => a.name.localeCompare(b.name)));
+      return res;
+    } finally {
+      setOltsBusy(false);
+    }
+  }
+
+  async function handleDeleteOlt(id) {
+    if (!window.confirm('Remover essa OLT? Os clientes ligados a ela ficam sem OLT/porta atribuída.')) return;
+    setOltsBusy(true);
+    try {
+      await api.deleteOlt(id);
+      setOlts((prev) => prev.filter((o) => o.id !== id));
+      if (labelOltId === id) setLabelOltId(0);
+      if (pickingOltId === id) setPickingOltId(0);
+      refresh();
+    } finally {
+      setOltsBusy(false);
+    }
+  }
+
+  async function handleSetClientOlt(sessionKey, oltId) {
+    await api.setClientOlt(sessionKey, oltId);
+    refresh();
+  }
 
   useEffect(() => {
     setPageAll(1);
@@ -684,7 +758,7 @@ export default function App() {
   async function handleStartCalibration(port) {
     setCalibrationBusy(true);
     try {
-      const res = await api.startPortCalibration(port);
+      const res = await api.startPortCalibration(port, pickingOltId || null);
       setCalibration(res.active);
       setCalibrationClients([]);
       setPickingPort(false);
@@ -858,8 +932,20 @@ export default function App() {
             {pickingPort && (
               <div className="calib-port-picker">
                 <span>Vai desligar qual porta?</span>
-                <div className="calib-port-grid">
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map((p) => (
+                <select
+                  className="olt-select"
+                  value={pickingOltId}
+                  onChange={(e) => setPickingOltId(Number(e.target.value))}
+                >
+                  <option value={0}>Genérico (sem OLT) — 8 portas</option>
+                  {olts.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name} — {o.port_count} portas
+                    </option>
+                  ))}
+                </select>
+                <div className="calib-port-grid" data-cols={oltPortCount(pickingOltId) > 8 ? '4' : undefined}>
+                  {Array.from({ length: oltPortCount(pickingOltId) }, (_, i) => i + 1).map((p) => (
                     <button
                       key={p}
                       type="button"
@@ -874,6 +960,81 @@ export default function App() {
             )}
           </div>
         )}
+
+        <div className="calib-trigger">
+          <button
+            type="button"
+            className={`calib-btn ${editingPortLabels ? 'active' : ''}`}
+            onClick={() => setEditingPortLabels((v) => !v)}
+          >
+            <IconPin />
+            <span>Nomear portas</span>
+          </button>
+          {editingPortLabels && (
+            <div className="calib-port-picker port-labels-picker">
+              <span>Nome/região de cada porta</span>
+              <select
+                className="olt-select"
+                value={labelOltId}
+                onChange={(e) => setLabelOltId(Number(e.target.value))}
+              >
+                <option value={0}>Genérico (sem OLT) — 8 portas</option>
+                {olts.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name} — {o.port_count} portas
+                  </option>
+                ))}
+              </select>
+              <div className="port-labels-grid">
+                {Array.from({ length: oltPortCount(labelOltId) }, (_, i) => i + 1).map((p) => (
+                  <PortLabelInput
+                    key={p}
+                    port={p}
+                    value={portLabels[p] || ''}
+                    busy={portLabelsBusy}
+                    onSave={handleSetPortLabel}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="calib-trigger">
+          <button
+            type="button"
+            className={`calib-btn ${editingOlts ? 'active' : ''}`}
+            onClick={() => setEditingOlts((v) => !v)}
+          >
+            <IconWrench />
+            <span>OLTs</span>
+          </button>
+          {editingOlts && (
+            <div className="calib-port-picker olts-picker">
+              <span>Equipamentos OLT (opcional)</span>
+              <ul className="olt-list">
+                {olts.map((o) => (
+                  <li key={o.id}>
+                    <span>
+                      {o.name} <em>{o.port_count}p</em>
+                    </span>
+                    <button
+                      type="button"
+                      className="olt-remove"
+                      disabled={oltsBusy}
+                      onClick={() => handleDeleteOlt(o.id)}
+                      aria-label={`Remover ${o.name}`}
+                    >
+                      <IconTrash />
+                    </button>
+                  </li>
+                ))}
+                {olts.length === 0 && <li className="olt-empty">Nenhuma OLT cadastrada ainda.</li>}
+              </ul>
+              <OltCreateForm busy={oltsBusy} onCreate={handleCreateOlt} />
+            </div>
+          )}
+        </div>
 
         {isWebPushSupported() && (
           <button
@@ -1036,6 +1197,8 @@ export default function App() {
                 onSetPort={handleSetPort}
                 onRemove={handleRemove}
                 onOpenDetail={openClientDetail}
+                olts={olts}
+                onSetOlt={handleSetClientOlt}
               />
             ) : tab === 'online' ? (
               <ClientBoard
@@ -1048,6 +1211,8 @@ export default function App() {
                 onSetPort={handleSetPort}
                 onRemove={handleRemove}
                 onOpenDetail={openClientDetail}
+                olts={olts}
+                onSetOlt={handleSetClientOlt}
               />
             ) : tab === 'disconnected' ? (
               <ClientBoard
@@ -1060,6 +1225,8 @@ export default function App() {
                 onSetPort={handleSetPort}
                 onRemove={handleRemove}
                 onOpenDetail={openClientDetail}
+                olts={olts}
+                onSetOlt={handleSetClientOlt}
               />
             ) : tab === 'map' ? (
               <MapBoard
@@ -1538,8 +1705,11 @@ function LocationForm({ row, onSave, onCancel }) {
   );
 }
 
-function PortTag({ row, onSetPort }) {
+function PortTag({ row, onSetPort, onSetOlt, olts = [] }) {
   const [saving, setSaving] = useState(false);
+  const [savingOlt, setSavingOlt] = useState(false);
+  const olt = olts.find((o) => o.id === Number(row.olt_id));
+  const portCount = olt ? olt.port_count : 8;
 
   async function handleChange(e) {
     const value = e.target.value;
@@ -1551,20 +1721,114 @@ function PortTag({ row, onSetPort }) {
     }
   }
 
+  async function handleOltChange(e) {
+    const value = e.target.value;
+    setSavingOlt(true);
+    try {
+      await onSetOlt(row.session_key, value ? Number(value) : null);
+    } finally {
+      setSavingOlt(false);
+    }
+  }
+
   return (
-    <label
-      className={`port-tag ${row.ont_port ? '' : 'is-unset'}`}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <select value={row.ont_port || ''} onChange={handleChange} disabled={saving}>
-        <option value="">Porta —</option>
-        {[1, 2, 3, 4, 5, 6, 7, 8].map((p) => (
-          <option key={p} value={p}>
-            Porta {p}
-          </option>
-        ))}
-      </select>
+    <span className="port-tag-group" onClick={(e) => e.stopPropagation()}>
+      {olts.length > 0 && (
+        <label className={`port-tag olt-tag ${row.olt_id ? '' : 'is-unset'}`}>
+          <select value={row.olt_id || ''} onChange={handleOltChange} disabled={savingOlt}>
+            <option value="">OLT —</option>
+            {olts.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <label className={`port-tag ${row.ont_port ? '' : 'is-unset'}`}>
+        <select value={row.ont_port || ''} onChange={handleChange} disabled={saving}>
+          <option value="">Porta —</option>
+          {Array.from({ length: portCount }, (_, i) => i + 1).map((p) => (
+            <option key={p} value={p}>
+              Porta {p}
+            </option>
+          ))}
+        </select>
+      </label>
+    </span>
+  );
+}
+
+function PortLabelInput({ port, value, busy, onSave }) {
+  const [text, setText] = useState(value);
+
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+
+  function commit() {
+    if (text.trim() === (value || '')) return;
+    onSave(port, text.trim());
+  }
+
+  return (
+    <label className="port-label-row">
+      <span>Porta {port}</span>
+      <input
+        type="text"
+        placeholder="ex: Bairro Alto"
+        value={text}
+        disabled={busy}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+        }}
+      />
     </label>
+  );
+}
+
+function OltCreateForm({ busy, onCreate }) {
+  const [name, setName] = useState('');
+  const [portCount, setPortCount] = useState(16);
+  const [error, setError] = useState('');
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError('');
+    const res = await onCreate(name, Number(portCount));
+    if (!res.ok) {
+      setError(res.error || 'Falha ao criar OLT');
+      return;
+    }
+    setName('');
+    setPortCount(16);
+  }
+
+  return (
+    <form className="olt-create-form" onSubmit={handleSubmit}>
+      <input
+        type="text"
+        placeholder="Nome da OLT (ex: OLT VSOL)"
+        value={name}
+        disabled={busy}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <input
+        type="number"
+        min="1"
+        max="128"
+        placeholder="Portas"
+        value={portCount}
+        disabled={busy}
+        onChange={(e) => setPortCount(e.target.value)}
+      />
+      <button type="submit" disabled={busy || !name.trim()}>
+        Adicionar
+      </button>
+      {error && <span className="olt-create-error">{error}</span>}
+    </form>
   );
 }
 
@@ -1582,7 +1846,7 @@ function IconTrash() {
   );
 }
 
-function ClientBoard({ rows, emptyTitle, emptyHint, mode, onRename, onSetLocation, onSetPort, onRemove, onOpenDetail }) {
+function ClientBoard({ rows, emptyTitle, emptyHint, mode, onRename, onSetLocation, onSetPort, onSetOlt, onRemove, onOpenDetail, olts = [] }) {
   const [editingLoc, setEditingLoc] = useState(null);
 
   if (!rows.length) {
@@ -1629,7 +1893,7 @@ function ClientBoard({ rows, emptyTitle, emptyHint, mode, onRename, onSetLocatio
                 <IconPin />
                 <span>{locSummary || 'Região'}</span>
               </button>
-              <PortTag row={row} onSetPort={onSetPort} />
+              <PortTag row={row} onSetPort={onSetPort} onSetOlt={onSetOlt} olts={olts} />
               {!online && (
                 <button
                   type="button"

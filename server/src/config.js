@@ -19,6 +19,7 @@ export const config = {
   webhookNotifyClients: String(process.env.WEBHOOK_NOTIFY_CLIENTS || '').toLowerCase() === 'true',
   outageAlert: {
     threshold: Number(process.env.OUTAGE_ALERT_THRESHOLD || 3),
+    percentThreshold: Number(process.env.OUTAGE_ALERT_PERCENT || 0.5),
     windowMinutes: Number(process.env.OUTAGE_ALERT_WINDOW_MINUTES || 5),
     cooldownMinutes: Number(process.env.OUTAGE_ALERT_COOLDOWN_MINUTES || 30),
   },

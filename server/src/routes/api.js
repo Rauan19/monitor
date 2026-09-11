@@ -1,10 +1,13 @@
 import { Router } from 'express';
 import {
+  createOlt,
+  deleteOlt,
   getAddressNameMap,
   getBandwidthBaseline,
   getClientBySessionKey,
   getDashboardStats,
   getHourlyLoad,
+  getOlt,
   getPollStatus,
   getSlaByPort,
   getSlaStats,
@@ -20,15 +23,20 @@ import {
   listLogEvents,
   listLogTopics,
   listMapPoints,
+  listOlts,
   listOnline,
+  listPortLabels,
   listSystemStats,
   registerPushToken,
   removeSession,
   setAlias,
+  setClientOlt,
   setLocation,
   setPort,
   setPortBulk,
+  setPortLabel,
   unregisterPushToken,
+  updateOlt,
 } from '../db/index.js';
 import { config } from '../config.js';
 import { getAllBandwidth } from '../poller/bandwidth.js';
@@ -168,12 +176,18 @@ apiRouter.post('/clients/remove', (req, res) => {
 // a porta em lote pra quem cair durante o teste manual de uma porta ---
 
 apiRouter.post('/port-calibration/start', (req, res) => {
-  const { port } = req.body || {};
+  const { port, oltId } = req.body || {};
   const n = Number(port);
-  if (!Number.isInteger(n) || n < 1 || n > 8) {
-    return res.status(400).json({ error: 'Porta deve ser um número entre 1 e 8' });
+  let maxPort = 8;
+  if (oltId) {
+    const olt = getOlt(oltId);
+    if (!olt) return res.status(400).json({ error: 'OLT não encontrada' });
+    maxPort = olt.port_count;
   }
-  const active = startCalibration(n);
+  if (!Number.isInteger(n) || n < 1 || n > maxPort) {
+    return res.status(400).json({ error: `Porta deve ser um número entre 1 e ${maxPort}` });
+  }
+  const active = startCalibration(n, oltId ? Number(oltId) : null);
   res.json({ ok: true, active });
 });
 
@@ -190,7 +204,8 @@ apiRouter.post('/port-calibration/apply', (_req, res) => {
   const clients = listDisconnectedSince(active.startedAt);
   const result = setPortBulk(
     clients.map((c) => c.session_key),
-    active.port
+    active.port,
+    active.oltId
   );
   stopCalibration();
   res.json({ ok: true, ...result });
@@ -199,6 +214,53 @@ apiRouter.post('/port-calibration/apply', (_req, res) => {
 apiRouter.post('/port-calibration/cancel', (_req, res) => {
   const active = stopCalibration();
   res.json({ ok: true, wasActive: !!active });
+});
+
+// --- OLTs: catálogo opcional de equipamentos (nome + quantidade de portas) ---
+
+apiRouter.get('/olts', (_req, res) => {
+  res.json({ olts: listOlts() });
+});
+
+apiRouter.post('/olts', (req, res) => {
+  const { name, portCount } = req.body || {};
+  const result = createOlt(name, portCount);
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
+
+apiRouter.put('/olts/:id', (req, res) => {
+  const { name, portCount } = req.body || {};
+  const result = updateOlt(req.params.id, { name, portCount });
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
+
+apiRouter.delete('/olts/:id', (req, res) => {
+  const result = deleteOlt(req.params.id);
+  res.json(result);
+});
+
+apiRouter.post('/clients/olt', (req, res) => {
+  const { sessionKey, oltId } = req.body || {};
+  if (!sessionKey) return res.status(400).json({ error: 'sessionKey é obrigatório' });
+  const result = setClientOlt(sessionKey, oltId);
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
+
+// --- Nome/região de cada porta, opcionalmente por OLT, usado nas notificações de queda em massa ---
+
+apiRouter.get('/port-labels', (req, res) => {
+  const oltId = req.query.oltId ? Number(req.query.oltId) : 0;
+  res.json({ labels: listPortLabels(oltId) });
+});
+
+apiRouter.post('/port-labels', (req, res) => {
+  const { oltId, port, label } = req.body || {};
+  const result = setPortLabel(oltId || 0, port, label);
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json(result);
 });
 
 // --- Saúde do CCR ---

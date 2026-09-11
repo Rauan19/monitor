@@ -138,9 +138,19 @@ export const api = {
     request('/api/push/register', { method: 'POST', body: JSON.stringify({ token, platform: 'web' }) }),
   unregisterPushToken: (token) =>
     request('/api/push/unregister', { method: 'POST', body: JSON.stringify({ token }) }),
-  startPortCalibration: (port) =>
-    request('/api/port-calibration/start', { method: 'POST', body: JSON.stringify({ port }) }),
+  startPortCalibration: (port, oltId) =>
+    request('/api/port-calibration/start', { method: 'POST', body: JSON.stringify({ port, oltId: oltId || null }) }),
   portCalibrationStatus: () => request('/api/port-calibration/status'),
   applyPortCalibration: () => request('/api/port-calibration/apply', { method: 'POST' }),
   cancelPortCalibration: () => request('/api/port-calibration/cancel', { method: 'POST' }),
+  portLabels: (oltId = 0) => request(`/api/port-labels?oltId=${oltId}`),
+  setPortLabel: (oltId, port, label) =>
+    request('/api/port-labels', { method: 'POST', body: JSON.stringify({ oltId: oltId || 0, port, label }) }),
+  listOlts: () => request('/api/olts'),
+  createOlt: (name, portCount) =>
+    request('/api/olts', { method: 'POST', body: JSON.stringify({ name, portCount }) }),
+  updateOlt: (id, data) => request(`/api/olts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteOlt: (id) => request(`/api/olts/${id}`, { method: 'DELETE' }),
+  setClientOlt: (sessionKey, oltId) =>
+    request('/api/clients/olt', { method: 'POST', body: JSON.stringify({ sessionKey, oltId: oltId || null }) }),
 };

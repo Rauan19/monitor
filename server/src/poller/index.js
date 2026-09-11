@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { mikrotik } from '../mikrotik/client.js';
-import { getRecentDisconnectGroups, updatePollStatus, upsertOnlineSessions } from '../db/index.js';
+import { getOlt, getRecentDisconnectGroups, listPortLabels, updatePollStatus, upsertOnlineSessions } from '../db/index.js';
 import { updateBandwidth } from './bandwidth.js';
 import { notifyWebhook } from '../notify.js';
 import { sendPushToAll } from '../push.js';
@@ -12,32 +12,58 @@ let wasConnected = null; // null = ainda não sabemos
 const outageCooldowns = new Map(); // "port:3" | "region:Centro" -> timestamp do último push
 
 function checkCorrelatedOutages() {
-  const { threshold, windowMinutes, cooldownMinutes } = config.outageAlert;
+  const { threshold, percentThreshold, windowMinutes, cooldownMinutes } = config.outageAlert;
   const { byPort, byRegion } = getRecentDisconnectGroups({ minutes: windowMinutes, threshold });
   const now = Date.now();
   const cooldownMs = cooldownMinutes * 60 * 1000;
 
   for (const group of byPort) {
-    const key = `port:${group.port}`;
+    if (group.percent < percentThreshold) continue;
+    const key = `olt:${group.oltId || 0}:port:${group.port}`;
     const lastSent = outageCooldowns.get(key) || 0;
     if (now - lastSent < cooldownMs) continue;
     outageCooldowns.set(key, now);
+    const olt = getOlt(group.oltId);
+    const label = listPortLabels(group.oltId)[group.port];
+    const portDesc = [olt ? `OLT ${olt.name}` : null, label ? `Porta ${group.port} (${label})` : `Porta ${group.port}`]
+      .filter(Boolean)
+      .join(' — ');
+    const pct = Math.round(group.percent * 100);
     sendPushToAll({
-      title: `⚠️ Queda em massa — Porta ${group.port}`,
-      body: `${group.count} clientes caíram juntos na porta ${group.port} nos últimos ${windowMinutes} min.`,
-      data: { type: 'outage_port', port: group.port, count: group.count, names: group.names },
+      title: `⚠️ Queda em massa — ${portDesc}`,
+      body: `${group.count} de ${group.total} clientes caíram na ${portDesc} (${pct}%) nos últimos ${windowMinutes} min.`,
+      data: {
+        type: 'outage_port',
+        oltId: group.oltId || null,
+        oltName: olt?.name || null,
+        port: group.port,
+        label: label || null,
+        count: group.count,
+        total: group.total,
+        percent: group.percent,
+        names: group.names,
+      },
     });
   }
 
   for (const group of byRegion) {
+    if (group.percent < percentThreshold) continue;
     const key = `region:${group.region}`;
     const lastSent = outageCooldowns.get(key) || 0;
     if (now - lastSent < cooldownMs) continue;
     outageCooldowns.set(key, now);
+    const pct = Math.round(group.percent * 100);
     sendPushToAll({
       title: `⚠️ Queda em massa — ${group.region}`,
-      body: `${group.count} clientes caíram juntos em "${group.region}" nos últimos ${windowMinutes} min.`,
-      data: { type: 'outage_region', region: group.region, count: group.count, names: group.names },
+      body: `${group.count} de ${group.total} clientes caíram em "${group.region}" (${pct}%) nos últimos ${windowMinutes} min.`,
+      data: {
+        type: 'outage_region',
+        region: group.region,
+        count: group.count,
+        total: group.total,
+        percent: group.percent,
+        names: group.names,
+      },
     });
   }
 }

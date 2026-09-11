@@ -1338,9 +1338,19 @@ select {
   color: #ffffff;
 }
 
+.port-tag-group {
+  display: inline-flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
 .port-tag {
   flex-shrink: 0;
   display: inline-flex;
+}
+
+.port-tag.olt-tag select {
+  color: var(--cyan-ink, var(--ink-faint));
 }
 
 .port-tag select {
@@ -1587,6 +1597,170 @@ select {
 .calib-port-grid button:disabled {
   opacity: 0.5;
   cursor: wait;
+}
+
+.port-labels-picker,
+.olts-picker {
+  width: max(220px, 100%);
+}
+
+.olt-select {
+  width: 100%;
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.8rem;
+  margin: 0.4rem 0 0.6rem;
+}
+
+.calib-port-grid[data-cols='4'] {
+  grid-template-columns: repeat(4, 1fr);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.olt-list {
+  list-style: none;
+  margin: 0.4rem 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.olt-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  background: var(--surface-2);
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
+.olt-list li em {
+  font-style: normal;
+  color: var(--ink-faint);
+  margin-left: 0.35rem;
+}
+
+.olt-empty {
+  color: var(--ink-faint);
+  font-size: 0.78rem;
+  justify-content: center !important;
+}
+
+.olt-remove {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  display: inline-flex;
+  padding: 0.15rem;
+}
+
+.olt-remove svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.olt-remove:hover {
+  color: var(--bad-solid);
+}
+
+.olt-create-form {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.olt-create-form input[type='text'] {
+  flex: 1;
+  min-width: 120px;
+}
+
+.olt-create-form input[type='number'] {
+  width: 64px;
+}
+
+.olt-create-form input {
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.olt-create-form button {
+  appearance: none;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.olt-create-form button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.olt-create-error {
+  flex-basis: 100%;
+  color: var(--bad-solid);
+  font-size: 0.72rem;
+}
+
+.port-labels-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.port-label-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.port-label-row span {
+  display: block;
+  flex: 0 0 52px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  text-transform: none;
+  letter-spacing: normal;
+  margin: 0;
+}
+
+.port-label-row input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.port-label-row input:focus {
+  outline: 2px solid var(--accent-bg);
+  border-color: var(--accent);
 }
 
 .calib-banner {

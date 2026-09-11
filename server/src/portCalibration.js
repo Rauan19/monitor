@@ -3,10 +3,10 @@
 // aqui. Enquanto ativo, a gente não dispara alerta de "queda em massa" (já se
 // sabe a causa) e o admin consegue aplicar a porta certa em lote pra todo mundo
 // que caiu durante a janela, em vez de marcar cliente por cliente.
-let active = null; // { port, startedAt }
+let active = null; // { port, oltId, startedAt }
 
-export function startCalibration(port) {
-  active = { port, startedAt: new Date().toISOString() };
+export function startCalibration(port, oltId = null) {
+  active = { port, oltId: oltId || null, startedAt: new Date().toISOString() };
   return active;
 }
 
