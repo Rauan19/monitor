@@ -106,6 +106,16 @@ export function getDb() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT,
+      title TEXT NOT NULL,
+      body TEXT,
+      data TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+
     CREATE TABLE IF NOT EXISTS port_labels (
       olt_id INTEGER NOT NULL DEFAULT 0,
       port INTEGER NOT NULL,
@@ -853,6 +863,27 @@ export function registerPushToken(token, platform) {
 export function unregisterPushToken(token) {
   const database = getDb();
   database.prepare(`DELETE FROM push_tokens WHERE token = ?`).run(token);
+}
+
+export function saveNotification({ type, title, body, data }) {
+  const database = getDb();
+  database
+    .prepare(`INSERT INTO notifications (type, title, body, data, created_at) VALUES (?, ?, ?, ?, ?)`)
+    .run(type || null, title, body || null, data ? JSON.stringify(data) : null, new Date().toISOString());
+}
+
+export function listNotifications({ page = 1, pageSize = 20 } = {}) {
+  const database = getDb();
+  const total = database.prepare(`SELECT COUNT(*) AS c FROM notifications`).get().c;
+  const meta = normalizePage(page, pageSize, total);
+  const items = database
+    .prepare(
+      `SELECT id, type, title, body, data, created_at FROM notifications
+       ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    )
+    .all(meta.pageSize, meta.offset)
+    .map((row) => ({ ...row, data: row.data ? JSON.parse(row.data) : null }));
+  return { items, ...meta };
 }
 
 export function listPushTokens() {

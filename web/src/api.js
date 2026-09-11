@@ -153,4 +153,6 @@ export const api = {
   deleteOlt: (id) => request(`/api/olts/${id}`, { method: 'DELETE' }),
   setClientOlt: (sessionKey, oltId) =>
     request('/api/clients/olt', { method: 'POST', body: JSON.stringify({ sessionKey, oltId: oltId || null }) }),
+  notifications: ({ page = 1, pageSize = 20 } = {}) =>
+    request(`/api/notifications?page=${page}&pageSize=${pageSize}`),
 };

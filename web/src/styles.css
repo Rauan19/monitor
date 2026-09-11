@@ -611,6 +611,26 @@ select {
   white-space: nowrap;
 }
 
+.notification-pct {
+  font-weight: 700;
+  color: var(--amber-ink);
+}
+
+.notification-row .row-title {
+  min-width: 0;
+}
+
+.notification-row .row-title .client-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+}
+
+.notification-row .row-title span {
+  color: var(--ink-soft);
+  white-space: normal;
+}
+
 .mac-copy {
   appearance: none;
   border: 0;

@@ -80,6 +80,7 @@ const TABS = [
   { id: 'online', label: 'Online', hint: 'Conectados agora' },
   { id: 'disconnected', label: 'Offline', hint: 'Últimas 24h' },
   { id: 'history', label: 'Histórico', hint: 'Eventos' },
+  { id: 'notifications', label: 'Notificações', hint: 'Alertas de queda' },
   { id: 'map', label: 'Mapa', hint: 'Por localização' },
   { id: 'system', label: 'Sistema', hint: 'Saúde do CCR' },
   { id: 'stats', label: 'Estatísticas', hint: 'Gráficos e ranking' },
@@ -290,6 +291,7 @@ const TAB_ICONS = {
   online: IconOnline,
   disconnected: IconDown,
   history: IconHistory,
+  notifications: IconBell,
   map: IconMap,
   system: IconServer,
   stats: IconChart,
@@ -373,6 +375,10 @@ export default function App() {
   const [editingOlts, setEditingOlts] = useState(false);
   const [oltsBusy, setOltsBusy] = useState(false);
   const [pickingOltId, setPickingOltId] = useState(0);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsMeta, setNotificationsMeta] = useState(emptyMeta);
+  const [notificationsPage, setNotificationsPage] = useState(1);
+  const [notificationsError, setNotificationsError] = useState('');
 
   function metaOf(res) {
     return {
@@ -618,6 +624,26 @@ export default function App() {
       clearInterval(id);
     };
   }, [user, tab]);
+
+  const loadNotifications = useCallback(async () => {
+    try {
+      const res = await api.notifications({ page: notificationsPage, pageSize: PAGE_SIZE });
+      setNotifications(res.items || []);
+      setNotificationsMeta(metaOf(res));
+      setNotificationsError('');
+    } catch (err) {
+      setNotificationsError(err.message || 'Falha ao carregar notificações');
+    }
+  }, [notificationsPage]);
+
+  useEffect(() => {
+    if (!user || tab !== 'notifications') return;
+    loadNotifications();
+    const id = setInterval(loadNotifications, 15000);
+    return () => {
+      clearInterval(id);
+    };
+  }, [user, tab, notificationsPage]);
 
   useEffect(() => {
     if (!user || tab !== 'stats') return;
@@ -1286,8 +1312,17 @@ export default function App() {
                 onOpenDetail={openClientDetail}
                 error={statsError}
               />
+            ) : tab === 'notifications' ? (
+              <NotificationsBoard rows={notifications} error={notificationsError} />
             ) : (
               <EventBoard rows={events} />
+            )}
+
+            {tab === 'notifications' && !loading && notificationsMeta.total > 0 && (
+              <Pager
+                meta={notificationsMeta}
+                onChange={setNotificationsPage}
+              />
             )}
 
             {isListTab && !loading && activeMeta.total > 0 && (
@@ -2950,6 +2985,53 @@ function EventBoard({ rows }) {
             <div className="row-meta">
               <CopyMac value={row.caller_id} />
               <span>{formatDate(row.created_at)}</span>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function NotificationsBoard({ rows, error }) {
+  if (error) {
+    return (
+      <div className="banner" role="alert">
+        <strong>Falha ao carregar notificações</strong>
+        <span>{error}</span>
+      </div>
+    );
+  }
+
+  if (!rows.length) {
+    return (
+      <div className="empty">
+        <p>Nenhuma notificação ainda</p>
+        <span>Alertas de queda em massa por porta/OLT ou região aparecem aqui.</span>
+      </div>
+    );
+  }
+
+  return (
+    <ul className="list-stack">
+      {rows.map((row) => {
+        const isRegion = row.type === 'outage_region';
+        const pct = row.data?.percent != null ? Math.round(row.data.percent * 100) : null;
+        return (
+          <li key={row.id} className="row-card off notification-row">
+            <div className="row-main">
+              <span className={`badge warn`}>
+                <IconAlert />
+                {isRegion ? 'Região' : 'Porta'}
+              </span>
+              <div className="row-title">
+                <strong className="client-name">{row.title}</strong>
+                <span>{row.body}</span>
+              </div>
+            </div>
+            <div className="row-meta">
+              {pct != null && <span className="notification-pct">{pct}%</span>}
+              <span title={formatDate(row.created_at)}>{relativeAgo(row.created_at)}</span>
             </div>
           </li>
         );

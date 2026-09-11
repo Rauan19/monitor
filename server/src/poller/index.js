@@ -3,7 +3,7 @@ import { mikrotik } from '../mikrotik/client.js';
 import { getOlt, getRecentDisconnectGroups, listPortLabels, updatePollStatus, upsertOnlineSessions } from '../db/index.js';
 import { updateBandwidth } from './bandwidth.js';
 import { notifyWebhook } from '../notify.js';
-import { sendPushToAll } from '../push.js';
+import { enqueueOutageNotification } from '../notifyQueue.js';
 import { getActiveCalibration } from '../portCalibration.js';
 
 let timer = null;
@@ -29,7 +29,7 @@ function checkCorrelatedOutages() {
       .filter(Boolean)
       .join(' — ');
     const pct = Math.round(group.percent * 100);
-    sendPushToAll({
+    enqueueOutageNotification({
       title: `⚠️ Queda em massa — ${portDesc}`,
       body: `${group.count} de ${group.total} clientes caíram na ${portDesc} (${pct}%) nos últimos ${windowMinutes} min.`,
       data: {
@@ -53,7 +53,7 @@ function checkCorrelatedOutages() {
     if (now - lastSent < cooldownMs) continue;
     outageCooldowns.set(key, now);
     const pct = Math.round(group.percent * 100);
-    sendPushToAll({
+    enqueueOutageNotification({
       title: `⚠️ Queda em massa — ${group.region}`,
       body: `${group.count} de ${group.total} clientes caíram em "${group.region}" (${pct}%) nos últimos ${windowMinutes} min.`,
       data: {

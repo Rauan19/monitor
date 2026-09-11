@@ -23,6 +23,7 @@ import {
   listLogEvents,
   listLogTopics,
   listMapPoints,
+  listNotifications,
   listOlts,
   listOnline,
   listPortLabels,
@@ -145,16 +146,18 @@ apiRouter.get('/map', (_req, res) => {
   res.json({ items: listMapPoints() });
 });
 
+apiRouter.get('/notifications', (req, res) => {
+  const { page = 1, pageSize = 20 } = req.query;
+  res.json(listNotifications({ page: Number(page), pageSize: Number(pageSize) }));
+});
+
 apiRouter.post('/clients/port', (req, res) => {
   const { sessionKey, port } = req.body || {};
   if (!sessionKey || typeof sessionKey !== 'string') {
     return res.status(400).json({ error: 'sessionKey obrigatório' });
   }
-  if (port !== null && port !== undefined && port !== '') {
-    const n = Number(port);
-    if (!Number.isInteger(n) || n < 1 || n > 8) {
-      return res.status(400).json({ error: 'Porta deve ser um número entre 1 e 8' });
-    }
+  if (port !== null && port !== undefined && port !== '' && !Number.isInteger(Number(port))) {
+    return res.status(400).json({ error: 'Porta inválida' });
   }
   const row = setPort(sessionKey, port);
   res.json({ ok: true, ...row });
