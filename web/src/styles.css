@@ -816,6 +816,9 @@ select {
 }
 
 .map-container {
+  position: relative;
+  isolation: isolate;
+  z-index: 0;
   flex: 1;
   min-height: 440px;
   border-radius: var(--radius-sm);
