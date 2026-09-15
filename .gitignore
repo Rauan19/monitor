@@ -34,7 +34,10 @@ yarn-error.*
 .env*.local
 
 # Firebase (push notifications)
-google-services.json
+# google-services.json fica versionado de proposito: o EAS Build so envia
+# arquivos rastreados pelo git, e sem ele o prebuild falha. Nao e segredo,
+# vai embutido no APK e e protegido por nome de pacote + assinatura.
+# As chaves de service account abaixo SAO secretas e ficam fora do git.
 *firebase-adminsdk*.json
 *service-account*.json
 
