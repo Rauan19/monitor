@@ -200,6 +200,14 @@ export function getDb() {
 
     -- Historico de subida/queda dos links vigiados. Sem isso da pra saber que
     -- um link esta caido agora, mas nao quando caiu nem quantas vezes piscou.
+    -- Marcadores de "isso ja foi feito uma vez". Usado pela semeadura dos links,
+    -- que nao pode repetir depois que o operador apagar tudo de proposito.
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS link_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -293,6 +301,65 @@ export function getDb() {
 }
 
 // ---------------- Links vigiados ----------------
+
+function metaJaFeito(chave) {
+  const database = getDb();
+  return !!database.prepare(`SELECT 1 FROM app_meta WHERE key = ?`).get(chave);
+}
+
+function marcarMetaFeito(chave, valor) {
+  const database = getDb();
+  database
+    .prepare(`INSERT OR REPLACE INTO app_meta (key, value, created_at) VALUES (?, ?, ?)`)
+    .run(chave, valor == null ? null : String(valor), new Date().toISOString());
+}
+
+// Um CCR de provedor tem mais de mil interfaces, e quase todas sao PPPoE de
+// cliente. Entre as ~40 restantes, muitas estao cadastradas mas sem uso (VLAN
+// criada e nunca usada, porta de switch desligada). Trafego acumulado separa as
+// duas coisas melhor que qualquer heuristica de nome: uma porta que moveu
+// centenas de GB e transporte de verdade.
+const LINK_SEED_MIN_GB = Number(process.env.LINK_SEED_MIN_GB || 100);
+
+/**
+ * Deriva um apelido do proprio nome da interface quando o nome tem estrutura
+ * reconhecivel de OLT/porta. Nao inventa localizacao: chamar `ether4` de
+ * "Torre Norte" seria adivinhar, e apelido errado num alerta e pior que apelido
+ * nenhum. O operador renomeia na tela de Links.
+ */
+function apelidoDerivado(nome) {
+  const m = String(nome).match(/^(.*?)[\/\s]+PORTA[\s-]*(\d+)$/i);
+  if (m) {
+    const olt = m[1].replace(/^OLT\s+/i, '').replace(/\s+/g, ' ').trim();
+    return `OLT ${olt}, porta ${m[2]}`;
+  }
+  return null;
+}
+
+/**
+ * Cadastra automaticamente os links de transporte na primeira vez, pra tela nao
+ * nascer vazia esperando configuracao manual de dezenas de interfaces.
+ *
+ * Roda UMA vez: se o operador apagar os links de proposito, nao voltam. Por isso
+ * o marcador em app_meta em vez de checar se a tabela esta vazia.
+ */
+export function semearLinksSeNecessario(interfaces) {
+  if (!interfaces?.length) return null;
+  if (metaJaFeito('links_semeados')) return null;
+
+  const candidatas = interfaces.filter((i) => {
+    if (i.type === 'pppoe-in' || /^<pppoe-/.test(i.name)) return false;
+    if (!i.running) return false; // interface caida agora ficaria "Caido" pra sempre na tela
+    const gb = ((i.rxByte || 0) + (i.txByte || 0)) / 1073741824;
+    return gb >= LINK_SEED_MIN_GB;
+  });
+
+  for (const i of candidatas) {
+    addMonitoredLink(i.name, apelidoDerivado(i.name));
+  }
+  marcarMetaFeito('links_semeados', candidatas.length);
+  return candidatas.map((i) => i.name);
+}
 
 export function listMonitoredLinks() {
   const database = getDb();

@@ -1,5 +1,5 @@
 import { mikrotik } from '../mikrotik/client.js';
-import { listMonitoredLinks, saveLinkEvent } from '../db/index.js';
+import { listMonitoredLinks, saveLinkEvent, semearLinksSeNecessario } from '../db/index.js';
 import { enqueueNotification } from '../notifyQueue.js';
 
 // Vigia o estado das interfaces de transporte do CCR (uplink, fibra pra POP,
@@ -22,12 +22,20 @@ const anterior = new Map(); // name -> { running, linkDowns }
 let primeiraLeitura = true;
 
 export async function checkLinks() {
+  const interfaces = await mikrotik.getInterfaces();
+  if (!interfaces.length) return; // falha de leitura: nao inventa queda
+
+  // Na primeira execucao cadastra sozinho os links de transporte, pra tela nao
+  // nascer vazia esperando o operador escolher entre mais de mil interfaces.
+  const semeados = semearLinksSeNecessario(interfaces);
+  if (semeados?.length) {
+    console.log(`[links] cadastrados automaticamente ${semeados.length} links de transporte: ${semeados.join(', ')}`);
+  }
+
   const vigiados = listMonitoredLinks();
   if (!vigiados.length) return; // nada cadastrado, nada a fazer
 
   const porNome = new Map(vigiados.map((l) => [l.name, l.label]));
-  const interfaces = await mikrotik.getInterfaces();
-  if (!interfaces.length) return; // falha de leitura: nao inventa queda
 
   for (const iface of interfaces) {
     if (!porNome.has(iface.name)) continue;
