@@ -7,8 +7,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "androidStatusBar": {
-      "barStyle": "light-content",
-      "backgroundColor": "#09090b"
+      "barStyle": "light-content"
     },
     "android": {
       "package": "com.zcnet.monitorzcnet",
@@ -40,7 +39,9 @@
           "imageWidth": 220,
           "resizeMode": "contain"
         }
-      ]
+      ],
+      "expo-status-bar",
+      "expo-font"
     ],
     "extra": {
       "eas": {
