@@ -1,6 +1,6 @@
 # Monitor MikroTik (CCR1036)
 
-Painel web **somente leitura** que acompanha sessões PPPoE do MikroTik. Quando um cliente some de `/ppp/active`, o sistema registra a desconexão com horário — algo que o Winbox não guarda.
+Painel web **somente leitura** que acompanha sessões PPPoE do MikroTik. Quando um cliente some de `/ppp/active`, o sistema registra a desconexão com horário, algo que o Winbox não guarda.
 
 ## O que faz
 
@@ -13,7 +13,7 @@ Painel web **somente leitura** que acompanha sessões PPPoE do MikroTik. Quando 
 - Relatório mensal imprimível (Ctrl+P → salvar como PDF)
 - Exportação CSV de desconexões e histórico de eventos
 - Webhook opcional (Telegram/Slack/n8n) quando o CCR cai/volta a responder
-- App Android nativo (**MonitorZcnet**, pasta `app/`) com as mesmas telas + notificação push de queda em massa — veja [app/README.md](app/README.md)
+- App Android nativo (**MonitorZcnet**, pasta `app/`) com as mesmas telas + notificação push de queda em massa e de CCR fora do ar. Veja [app/README.md](app/README.md)
 - **Não altera nada** no CCR (só `print`)
 
 ## Pré-requisito no MikroTik
@@ -92,7 +92,7 @@ npm start
 | `GET /api/dhcp-leases?q=` | Leases DHCP ativos |
 | `GET /api/queues` | Filas simples (limite contratado x uso) |
 | `GET /api/wireless` | Clientes wireless registrados (sinal/CCQ) |
-| `GET /api/logs?q=&hours=` | Log do RouterOS (persistido — o buffer do CCR é circular) |
+| `GET /api/logs?q=&hours=` | Log do RouterOS (persistido, porque o buffer do CCR é circular) |
 | `GET /api/bandwidth-history?client=&hours=` | Série histórica de banda de um cliente |
 | `GET /api/top-consumers?hours=&limit=` | Ranking de consumo médio de banda |
 | `GET /api/sla?days=30&q=` | Uptime estimado por cliente, baseado nos eventos registrados |
@@ -107,6 +107,8 @@ npm start
 | `GET /api/report/monthly?days=30` | Relatório em HTML pronto pra imprimir/salvar como PDF |
 | `POST /api/push/register` | Registra um Expo push token (app mobile) |
 | `POST /api/push/unregister` | Remove um Expo push token |
+| `POST /api/push/test` | Dispara um push de teste (corpo opcional `{token}`) |
+| `GET /api/notifications` | Histórico de alertas já enviados |
 
 Dados ficam em `server/data/monitor.db` (SQLite). Histórico de sistema/banda/log é limpo automaticamente após `RETENTION_DAYS` (padrão 30 dias).
 
@@ -116,12 +118,32 @@ Se `WEBHOOK_URL` estiver definido no `.env`, o servidor faz um `POST` em JSON pr
 
 ### Notificação push (app MonitorZcnet)
 
-Quando 3+ clientes da mesma porta ONT ou da mesma região caem juntos numa janela curta, o servidor manda push pra todos os celulares com o app instalado e notificações ativadas — útil pra pegar queda de OLT/porta antes do cliente ligar reclamando. Configurável no `.env`:
+O servidor manda push pra todos os celulares com o app instalado e pros navegadores com notificação ativada nestes casos:
+
+- **Queda em massa**: 3+ clientes da mesma porta ONT ou da mesma região caem juntos numa janela curta. Útil pra pegar queda de OLT/porta antes do cliente ligar reclamando
+- **CCR fora do ar / voltou**: quando o próprio CCR para de responder e quando volta (fura a fila, por ser mais grave que um alerta de porta)
+
+Só avisa a queda do CCR se ele *estava* respondendo antes. Se o servidor subiu e nunca conseguiu conectar, isso é configuração errada, não queda, e não dispara push.
+
+Configurável no `.env`:
 
 ```env
-OUTAGE_ALERT_THRESHOLD=3
-OUTAGE_ALERT_WINDOW_MINUTES=5
-OUTAGE_ALERT_COOLDOWN_MINUTES=30
+OUTAGE_ALERT_THRESHOLD=3            # mínimo de clientes caídos no grupo
+OUTAGE_ALERT_PERCENT=0.5            # e pelo menos 50% do grupo (0..1)
+OUTAGE_ALERT_WINDOW_MINUTES=5       # janela onde as quedas contam como "juntas"
+OUTAGE_ALERT_COOLDOWN_MINUTES=30    # não repete o alerta da mesma porta/região antes disso
+OUTAGE_ALERT_GAP_MS=60000           # espaçamento entre pushes quando vários alertas disparam juntos
+```
+
+Todo push também fica gravado no histórico, visível na aba **Notificações** do painel e na aba **Alertas** do app.
+
+#### Testar sem esperar uma queda
+
+No painel web (**Enviar push de teste**, ao lado do botão de notificações) ou no app (**Ajustes → Notificações push → Enviar push de teste**). Manda um push só pro aparelho que pediu e grava no histórico, então prova a corrente toda de uma vez: credencial do Firebase, token registrado, permissão no aparelho e escrita no banco. Pela API:
+
+```
+POST /api/push/test        # sem corpo: manda pra todos os dispositivos
+POST /api/push/test        # {"token":"..."}: manda só pra esse
 ```
 
 ### Autenticação

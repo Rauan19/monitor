@@ -3,7 +3,7 @@ import { mikrotik } from '../mikrotik/client.js';
 import { getOlt, getRecentDisconnectGroups, listPortLabels, updatePollStatus, upsertOnlineSessions } from '../db/index.js';
 import { updateBandwidth } from './bandwidth.js';
 import { notifyWebhook } from '../notify.js';
-import { enqueueOutageNotification } from '../notifyQueue.js';
+import { enqueueNotification } from '../notifyQueue.js';
 import { getActiveCalibration } from '../portCalibration.js';
 
 let timer = null;
@@ -27,10 +27,10 @@ function checkCorrelatedOutages() {
     const label = listPortLabels(group.oltId)[group.port];
     const portDesc = [olt ? `OLT ${olt.name}` : null, label ? `Porta ${group.port} (${label})` : `Porta ${group.port}`]
       .filter(Boolean)
-      .join(' — ');
+      .join(', ');
     const pct = Math.round(group.percent * 100);
-    enqueueOutageNotification({
-      title: `⚠️ Queda em massa — ${portDesc}`,
+    enqueueNotification({
+      title: `⚠️ Queda em massa: ${portDesc}`,
       body: `${group.count} de ${group.total} clientes caíram na ${portDesc} (${pct}%) nos últimos ${windowMinutes} min.`,
       data: {
         type: 'outage_port',
@@ -53,8 +53,8 @@ function checkCorrelatedOutages() {
     if (now - lastSent < cooldownMs) continue;
     outageCooldowns.set(key, now);
     const pct = Math.round(group.percent * 100);
-    enqueueOutageNotification({
-      title: `⚠️ Queda em massa — ${group.region}`,
+    enqueueNotification({
+      title: `⚠️ Queda em massa: ${group.region}`,
       body: `${group.count} de ${group.total} clientes caíram em "${group.region}" (${pct}%) nos últimos ${windowMinutes} min.`,
       data: {
         type: 'outage_region',
@@ -89,6 +89,14 @@ async function tick() {
 
     if (wasConnected === false) {
       notifyWebhook({ type: 'ccr_up', host: config.mikrotik.host });
+      enqueueNotification(
+        {
+          title: '✅ CCR voltou a responder',
+          body: `A conexão com ${config.mikrotik.host} foi restabelecida. ${result.onlineCount} clientes online.`,
+          data: { type: 'ccr_up', host: config.mikrotik.host, onlineCount: result.onlineCount },
+        },
+        { priority: true }
+      );
     }
     wasConnected = true;
 
@@ -124,6 +132,19 @@ async function tick() {
     });
     if (wasConnected !== false) {
       notifyWebhook({ type: 'ccr_down', host: config.mikrotik.host, error: message });
+      // Só avisa quando JÁ estava conectado antes (wasConnected === true). Se o
+      // servidor subiu e nunca conseguiu falar com o CCR (wasConnected === null),
+      // não é uma queda, é configuração errada, e não vale acordar ninguém.
+      if (wasConnected === true) {
+        enqueueNotification(
+          {
+            title: '🔴 CCR fora do ar',
+            body: `Sem resposta de ${config.mikrotik.host}: ${message}`,
+            data: { type: 'ccr_down', host: config.mikrotik.host, error: message },
+          },
+          { priority: true }
+        );
+      }
     }
     wasConnected = false;
     try {
@@ -139,7 +160,7 @@ async function tick() {
 export function startPoller() {
   if (timer) return;
   console.log(
-    `[poller] iniciando — ${config.mikrotik.host}:${config.mikrotik.port} a cada ${config.pollIntervalMs}ms`
+    `[poller] iniciando em ${config.mikrotik.host}:${config.mikrotik.port} a cada ${config.pollIntervalMs}ms`
   );
   tick();
   timer = setInterval(tick, config.pollIntervalMs);

@@ -6,7 +6,14 @@ import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import 'leaflet.markercluster';
 import { api } from './api';
 import Login from './Login';
-import { disableWebPush, enableWebPush, isWebPushEnabled, isWebPushSupported } from './push';
+import {
+  disableWebPush,
+  enableWebPush,
+  initWebPush,
+  isWebPushEnabled,
+  isWebPushSupported,
+  sendTestPush,
+} from './push';
 
 const PAGE_SIZE = 20;
 
@@ -362,6 +369,7 @@ export default function App() {
   const [pushEnabled, setPushEnabled] = useState(() => isWebPushEnabled());
   const [pushBusy, setPushBusy] = useState(false);
   const [pushError, setPushError] = useState('');
+  const [pushTestMsg, setPushTestMsg] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [calibration, setCalibration] = useState(null);
   const [calibrationClients, setCalibrationClients] = useState([]);
@@ -478,6 +486,11 @@ export default function App() {
     const id = setInterval(refresh, 5000);
     return () => clearInterval(id);
   }, [user, query, portFilter, eventType, pageAll, pageOnline, pageDisconnected, pageHistory]);
+
+  useEffect(() => {
+    if (!user) return;
+    initWebPush();
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -781,6 +794,22 @@ export default function App() {
     }
   }
 
+  async function handleTestPush() {
+    setPushBusy(true);
+    setPushError('');
+    setPushTestMsg('');
+    try {
+      const res = await sendTestPush();
+      if (res.ok) {
+        setPushTestMsg('Push de teste enviado, deve chegar em alguns segundos.');
+      } else {
+        setPushError(res.error || 'Falha ao enviar teste');
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
   async function handleStartCalibration(port) {
     setCalibrationBusy(true);
     try {
@@ -963,10 +992,10 @@ export default function App() {
                   value={pickingOltId}
                   onChange={(e) => setPickingOltId(Number(e.target.value))}
                 >
-                  <option value={0}>Genérico (sem OLT) — 8 portas</option>
+                  <option value={0}>Genérico (sem OLT), 8 portas</option>
                   {olts.map((o) => (
                     <option key={o.id} value={o.id}>
-                      {o.name} — {o.port_count} portas
+                      {o.name}, {o.port_count} portas
                     </option>
                   ))}
                 </select>
@@ -1004,10 +1033,10 @@ export default function App() {
                 value={labelOltId}
                 onChange={(e) => setLabelOltId(Number(e.target.value))}
               >
-                <option value={0}>Genérico (sem OLT) — 8 portas</option>
+                <option value={0}>Genérico (sem OLT), 8 portas</option>
                 {olts.map((o) => (
                   <option key={o.id} value={o.id}>
-                    {o.name} — {o.port_count} portas
+                    {o.name}, {o.port_count} portas
                   </option>
                 ))}
               </select>
@@ -1074,7 +1103,13 @@ export default function App() {
             <span>{pushBusy ? 'Aguarde…' : pushEnabled ? 'Notificações ativas' : 'Ativar notificações'}</span>
           </button>
         )}
+        {isWebPushSupported() && pushEnabled && (
+          <button type="button" className="push-test-btn" onClick={handleTestPush} disabled={pushBusy}>
+            Enviar push de teste
+          </button>
+        )}
         {pushError && <span className="push-error">{pushError}</span>}
+        {pushTestMsg && <span className="push-ok">{pushTestMsg}</span>}
 
         <button type="button" className="logout-btn" onClick={handleLogout}>
           <IconLogout />
@@ -1099,7 +1134,7 @@ export default function App() {
               <div>
                 <strong>Testando Porta {calibration.port}</strong>
                 <span>
-                  Pode desligar a porta agora — {calibrationClients.length} cliente
+                  Pode desligar a porta agora. {calibrationClients.length} cliente
                   {calibrationClients.length === 1 ? ' caiu' : 's caíram'} desde o início
                 </span>
               </div>
@@ -1771,7 +1806,7 @@ function PortTag({ row, onSetPort, onSetOlt, olts = [] }) {
       {olts.length > 0 && (
         <label className={`port-tag olt-tag ${row.olt_id ? '' : 'is-unset'}`}>
           <select value={row.olt_id || ''} onChange={handleOltChange} disabled={savingOlt}>
-            <option value="">OLT —</option>
+            <option value="">Sem OLT</option>
             {olts.map((o) => (
               <option key={o.id} value={o.id}>
                 {o.name}
@@ -1782,7 +1817,7 @@ function PortTag({ row, onSetPort, onSetOlt, olts = [] }) {
       )}
       <label className={`port-tag ${row.ont_port ? '' : 'is-unset'}`}>
         <select value={row.ont_port || ''} onChange={handleChange} disabled={saving}>
-          <option value="">Porta —</option>
+          <option value="">Sem porta</option>
           {Array.from({ length: portCount }, (_, i) => i + 1).map((p) => (
             <option key={p} value={p}>
               Porta {p}
@@ -2350,7 +2385,7 @@ function HourlyBarChart({ data }) {
         const total = d.avgDownBps + d.avgUpBps;
         const pct = Math.max(2, Math.round((total / max) * 100));
         return (
-          <div key={d.hour} className="bar-col" title={`${String(d.hour).padStart(2, '0')}h — ${formatBps(Math.round(total))}`}>
+          <div key={d.hour} className="bar-col" title={`${String(d.hour).padStart(2, '0')}h: ${formatBps(Math.round(total))}`}>
             <div className="bar" style={{ height: `${pct}%` }} />
             <span>{d.hour % 3 === 0 ? String(d.hour).padStart(2, '0') : ''}</span>
           </div>
@@ -2471,7 +2506,7 @@ function StatsBoard({
       {queueUsage.length > 0 && (
         <section className="sys-card wide">
           <CardHead title="Fila x consumo real" count={queueUsageMeta?.total} />
-          <p className="muted">Compara o limite contratado na fila com a média real de uso — útil pra achar quem paga por banda que não usa ou quem já saturou o plano.</p>
+          <p className="muted">Compara o limite contratado na fila com a média real de uso. Útil pra achar quem paga por banda que não usa ou quem já saturou o plano.</p>
           <div className="table-wrap">
             <table className="data-table">
               <thead>
@@ -2541,7 +2576,7 @@ function StatsBoard({
             </table>
           </div>
         ) : (
-          <p className="muted">Ainda sem amostras suficientes — aguarde o poller coletar histórico.</p>
+          <p className="muted">Ainda sem amostras suficientes, aguarde o poller coletar histórico.</p>
         )}
       </section>
 
@@ -2814,7 +2849,7 @@ function MapBoard({ points, error, onOpenDetail, onRefresh }) {
     mapRef.current = map;
 
     // o container nasce dentro de um flexbox que ainda não terminou de calcular o
-    // tamanho quando o Leaflet mede a área pela primeira vez — sem isso, o mapa
+    // tamanho quando o Leaflet mede a área pela primeira vez. Sem isso, o mapa
     // fica "preso" com poucos pixels de largura e não carrega os tiles direito.
     requestAnimationFrame(() => map.invalidateSize());
     const resizeObserver = new ResizeObserver(() => map.invalidateSize());
@@ -2993,6 +3028,30 @@ function EventBoard({ rows }) {
   );
 }
 
+const NOTIFICATION_KINDS = {
+  outage_port: { label: 'Porta', tone: 'warn' },
+  outage_region: { label: 'Região', tone: 'warn' },
+  ccr_down: { label: 'CCR fora do ar', tone: 'warn' },
+  ccr_up: { label: 'CCR voltou', tone: 'ok' },
+  test: { label: 'Teste', tone: 'ok' },
+};
+
+const MAX_NOTIFICATION_NAMES = 8;
+
+/**
+ * Tira travessao/meia-risca do texto do alerta. Os alertas gerados hoje ja vem
+ * sem, mas os gravados antes dessa mudanca tem " — " no meio do titulo.
+ * Normalizar na exibicao arruma o historico sem reescrever dado no banco.
+ */
+function semTravessao(texto) {
+  if (!texto) return texto;
+  return String(texto)
+    .replace(/\s+[—–−]\s+/g, ': ')
+    .replace(/[—–−]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function NotificationsBoard({ rows, error }) {
   if (error) {
     return (
@@ -3007,7 +3066,7 @@ function NotificationsBoard({ rows, error }) {
     return (
       <div className="empty">
         <p>Nenhuma notificação ainda</p>
-        <span>Alertas de queda em massa por porta/OLT ou região aparecem aqui.</span>
+        <span>Quedas em massa por porta/OLT ou região e o CCR caindo/voltando aparecem aqui.</span>
       </div>
     );
   }
@@ -3015,18 +3074,26 @@ function NotificationsBoard({ rows, error }) {
   return (
     <ul className="list-stack">
       {rows.map((row) => {
-        const isRegion = row.type === 'outage_region';
+        const kind = NOTIFICATION_KINDS[row.type] || { label: 'Alerta', tone: 'warn' };
         const pct = row.data?.percent != null ? Math.round(row.data.percent * 100) : null;
+        const names = Array.isArray(row.data?.names) ? row.data.names : [];
+        const extra = names.length - MAX_NOTIFICATION_NAMES;
         return (
           <li key={row.id} className="row-card off notification-row">
             <div className="row-main">
-              <span className={`badge warn`}>
-                <IconAlert />
-                {isRegion ? 'Região' : 'Porta'}
+              <span className={`badge ${kind.tone}`}>
+                {kind.tone === 'ok' ? <IconCheck /> : <IconAlert />}
+                {kind.label}
               </span>
               <div className="row-title">
-                <strong className="client-name">{row.title}</strong>
-                <span>{row.body}</span>
+                <strong className="client-name">{semTravessao(row.title)}</strong>
+                <span>{semTravessao(row.body)}</span>
+                {names.length > 0 && (
+                  <span className="notification-names">
+                    {names.slice(0, MAX_NOTIFICATION_NAMES).join(', ')}
+                    {extra > 0 ? ` +${extra}` : ''}
+                  </span>
+                )}
               </div>
             </div>
             <div className="row-meta">

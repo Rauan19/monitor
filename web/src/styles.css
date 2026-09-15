@@ -611,6 +611,12 @@ select {
   white-space: nowrap;
 }
 
+.notification-names {
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
 .notification-pct {
   font-weight: 700;
   color: var(--amber-ink);
@@ -1043,7 +1049,7 @@ select {
   padding: 0.3rem 0.5rem;
 }
 
-/* dessatura levemente os tiles de ruas pra não competir com as cores de status dos pontos — no satélite mantém as cores reais da foto */
+/* dessatura levemente os tiles de ruas pra não competir com as cores de status dos pontos. No satélite mantém as cores reais da foto */
 .map-container.streets .leaflet-layer {
   filter: saturate(0.45) brightness(1.04) contrast(0.96);
 }
@@ -1524,9 +1530,39 @@ select {
   border-color: rgba(23, 165, 107, 0.25);
 }
 
+.push-test-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  padding: 0.4rem 0.6rem;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.push-test-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.push-test-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .push-error {
   font-size: 0.7rem;
   color: var(--bad);
+  padding: 0 0.2rem;
+}
+
+.push-ok {
+  font-size: 0.7rem;
+  color: var(--ok-ink);
   padding: 0 0.2rem;
 }
 

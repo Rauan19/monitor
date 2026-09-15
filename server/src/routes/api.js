@@ -27,8 +27,10 @@ import {
   listOlts,
   listOnline,
   listPortLabels,
+  listPushTokens,
   listSystemStats,
   registerPushToken,
+  saveNotification,
   removeSession,
   setAlias,
   setClientOlt,
@@ -43,6 +45,7 @@ import { config } from '../config.js';
 import { getAllBandwidth } from '../poller/bandwidth.js';
 import { getActiveCalibration, startCalibration, stopCalibration } from '../portCalibration.js';
 import { mikrotik } from '../mikrotik/client.js';
+import { sendPushToTokens } from '../push.js';
 
 function withBandwidth(result) {
   const bw = getAllBandwidth();
@@ -545,7 +548,7 @@ apiRouter.get('/report/monthly', (req, res) => {
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8" />
-<title>Relatório de operação — Monitor MikroTik</title>
+<title>Relatório de operação | Monitor MikroTik</title>
 <style>
   body { font-family: -apple-system, 'Segoe UI', Arial, sans-serif; color: #111; padding: 2rem; max-width: 900px; margin: 0 auto; }
   h1 { font-size: 1.4rem; margin-bottom: 0; }
@@ -563,7 +566,7 @@ apiRouter.get('/report/monthly', (req, res) => {
 </style>
 </head>
 <body>
-  <h1>Relatório de operação — Monitor MikroTik</h1>
+  <h1>Relatório de operação | Monitor MikroTik</h1>
   <p class="sub">Período: últimos ${days} dias · gerado em ${generated}</p>
 
   <div class="metrics">
@@ -616,6 +619,39 @@ apiRouter.post('/push/unregister', (req, res) => {
   }
   unregisterPushToken(token);
   res.json({ ok: true });
+});
+
+// Dispara um push de teste pra conferir se a corrente toda está funcionando
+// (credencial do Firebase, token registrado, permissão no aparelho) sem ter que
+// esperar uma queda real. Manda só pro token informado; sem token, manda pra todos.
+apiRouter.post('/push/test', async (req, res) => {
+  const { token } = req.body || {};
+  const tokens = token && typeof token === 'string' ? [token] : listPushTokens().map((r) => r.token);
+
+  if (!tokens.length) {
+    return res.status(400).json({ error: 'nenhum dispositivo com notificação ativada' });
+  }
+
+  const title = '🔔 Teste de notificação';
+  const body = 'Se você está lendo isso, as notificações do Monitor estão funcionando.';
+  const result = await sendPushToTokens(tokens, { title, body, data: { type: 'test' } });
+
+  // Grava no histórico igual a um alerta real: assim o teste também prova que a
+  // escrita no banco funciona, não só a entrega do push.
+  try {
+    saveNotification({ type: 'test', title, body, data: { type: 'test' } });
+  } catch (err) {
+    console.error('[push] teste enviado mas falhou ao gravar no histórico:', err?.message || err);
+  }
+
+  if (!result.sent) {
+    return res.status(502).json({
+      error: result.errors[0] || 'não foi possível enviar o push',
+      ...result,
+    });
+  }
+
+  res.json({ ok: true, ...result });
 });
 
 apiRouter.get('/events', (req, res) => {
