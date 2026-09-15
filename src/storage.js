@@ -8,13 +8,29 @@ const KEYS = {
   pushToken: 'monitorzcnet:pushToken',
 };
 
+// Tuneis ngrok eram o endereco antigo do backend e sao efemeros: o link morre
+// quando o tunel cai. Se ficou um salvo no aparelho, ele tem prioridade sobre o
+// padrao e o app trava num endereco que nao existe mais. Descarta e volta pro
+// dominio fixo, sem o usuario precisar reinstalar nem mexer em Ajustes.
+function isEnderecoObsoleto(url) {
+  return /ngrok(-free)?\.(app|io|dev)/i.test(url || '');
+}
+
 export async function getServerUrl() {
   const saved = await AsyncStorage.getItem(KEYS.serverUrl);
+  if (saved && isEnderecoObsoleto(saved)) {
+    await AsyncStorage.removeItem(KEYS.serverUrl);
+    return DEFAULT_SERVER_URL;
+  }
   return saved || DEFAULT_SERVER_URL;
 }
 
 export async function setServerUrl(url) {
   const clean = String(url || '').trim().replace(/\/+$/, '');
+  if (isEnderecoObsoleto(clean)) {
+    await AsyncStorage.removeItem(KEYS.serverUrl);
+    return;
+  }
   await AsyncStorage.setItem(KEYS.serverUrl, clean);
 }
 
