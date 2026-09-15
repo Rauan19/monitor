@@ -1,0 +1,28 @@
+export const colors = {
+  bg: '#09090b',
+  surface: '#131316',
+  surface2: '#1a1a1e',
+  surface3: '#212126',
+  ink: '#f2f2f4',
+  inkSoft: '#98989f',
+  inkFaint: '#87878f',
+  line: 'rgba(255,255,255,0.08)',
+  lineStrong: 'rgba(255,255,255,0.14)',
+  ok: '#34d399',
+  okBg: 'rgba(52,211,153,0.14)',
+  warn: '#fbbf24',
+  warnBg: 'rgba(251,191,36,0.13)',
+  bad: '#f87171',
+  badBg: 'rgba(248,113,113,0.14)',
+  badSolid: '#dc2626',
+  accent: '#5b8def',
+  accentBg: 'rgba(91,141,239,0.14)',
+  violet: '#a78bfa',
+  violetBg: 'rgba(167,139,250,0.16)',
+  cyan: '#22d3ee',
+  cyanBg: 'rgba(34,211,238,0.14)',
+  amber: '#fb923c',
+  amberBg: 'rgba(251,146,60,0.16)',
+};
+
+export const radius = { md: 14, sm: 10, pill: 999 };
