@@ -3,8 +3,9 @@ import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
-import { Badge, EmptyState, ErrorBanner, LoadingState, Pager, SearchBar } from '../components/common';
+import { Badge, EmptyState, ErrorBanner, LoadingState, Pager, SearchBar, StaleBanner } from '../components/common';
 import { formatDate } from '../format';
+import { withCache } from '../cache';
 
 const PAGE_SIZE = 20;
 const emptyMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, pages: 1 };
@@ -22,11 +23,16 @@ export default function HistoryScreen() {
   const [type, setType] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [staleAt, setStaleAt] = useState(null);
   const focused = useRef(true);
 
   const load = useCallback(async () => {
     try {
-      const res = await api.events({ q: query, type, hours: 168, page, pageSize: PAGE_SIZE });
+      const { data: res, stale, savedAt } = await withCache(
+        `events:${type}:${query}:${page}`,
+        () => api.events({ q: query, type, hours: 168, page, pageSize: PAGE_SIZE })
+      );
+      setStaleAt(stale ? savedAt : null);
       setRows(res.items || []);
       setMeta({ page: res.page || 1, pageSize: res.pageSize || PAGE_SIZE, total: res.total || 0, pages: res.pages || 1 });
       setError('');
@@ -66,6 +72,7 @@ export default function HistoryScreen() {
         ))}
       </View>
       <ErrorBanner message={error} />
+      <StaleBanner savedAt={staleAt} />
       {loading ? (
         <LoadingState />
       ) : (

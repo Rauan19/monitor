@@ -4,6 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
 import ClientsListScreen from './ClientsListScreen';
+import { withCache } from '../cache';
 
 const MODES = [
   { id: 'all', label: 'Todos' },
@@ -18,9 +19,12 @@ export default function ClientsScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [dash, status] = await Promise.all([api.dashboard(), api.status()]);
-      setDashboard(dash);
-      setConnected(Boolean(status?.connected));
+      const { data } = await withCache('dashboard', async () => {
+        const [dash, status] = await Promise.all([api.dashboard(), api.status()]);
+        return { dash, status };
+      });
+      setDashboard(data.dash);
+      setConnected(Boolean(data.status?.connected));
     } catch {
       // segue com o valor anterior
     }

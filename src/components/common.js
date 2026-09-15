@@ -1,5 +1,6 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors, radius } from '../theme';
+import { relativeAgo } from '../format';
 
 export function Badge({ label, tone = 'ok' }) {
   const map = {
@@ -71,6 +72,20 @@ export function ErrorBanner({ message }) {
     <View style={styles.banner}>
       <Text style={styles.bannerTitle}>Erro</Text>
       <Text style={styles.bannerText}>{message}</Text>
+    </View>
+  );
+}
+
+/**
+ * Avisa que a tela esta mostrando a ultima resposta cacheada porque a rede
+ * falhou. Sem isso o usuario nao teria como saber que o dado e antigo.
+ */
+export function StaleBanner({ savedAt }) {
+  if (!savedAt) return null;
+  return (
+    <View style={styles.staleBanner}>
+      <Text style={styles.staleTitle}>Sem conexao com o servidor</Text>
+      <Text style={styles.staleText}>Mostrando dados de {relativeAgo(new Date(savedAt).toISOString())}</Text>
     </View>
   );
 }
@@ -153,6 +168,16 @@ const styles = StyleSheet.create({
   },
   bannerTitle: { color: '#fecaca', fontWeight: '700', fontSize: 12 },
   bannerText: { color: '#f3b4b4', fontSize: 12, marginTop: 2 },
+  staleBanner: {
+    backgroundColor: colors.amberBg,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(251,146,60,0.22)',
+    padding: 10,
+    marginBottom: 10,
+  },
+  staleTitle: { color: colors.amber, fontWeight: '700', fontSize: 12 },
+  staleText: { color: colors.inkSoft, fontSize: 12, marginTop: 2 },
   pager: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, marginTop: 10 },
   pagerBtn: {
     width: 32,

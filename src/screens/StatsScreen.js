@@ -3,10 +3,11 @@ import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-na
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
-import { Badge, Card, ErrorBanner, Pager, SearchBar } from '../components/common';
+import { Badge, Card, ErrorBanner, Pager, SearchBar, StaleBanner } from '../components/common';
 import PrimaryButton from '../components/PrimaryButton';
 import MiniBars from '../components/MiniBars';
 import { formatBps } from '../format';
+import { withCache } from '../cache';
 
 const emptyMeta = { page: 1, pageSize: 15, total: 0, pages: 1 };
 const metaOf = (res) => ({ page: res.page || 1, pageSize: res.pageSize || 15, total: res.total || 0, pages: res.pages || 1 });
@@ -30,18 +31,27 @@ export default function StatsScreen() {
   const [queueUsagePage, setQueueUsagePage] = useState(1);
 
   const [error, setError] = useState('');
+  const [staleAt, setStaleAt] = useState(null);
 
   const load = useCallback(async () => {
     try {
       const tzOffsetMinutes = new Date().getTimezoneOffset();
-      const [tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes] = await Promise.all([
-        api.topConsumers(24, topLimit),
-        api.sla({ days: 30, q: slaQuery, page: slaPage, pageSize: 15 }),
-        api.hourlyLoad(7, tzOffsetMinutes),
-        api.anomalies(168),
-        api.queueUsage({ hours: 24, page: queueUsagePage, pageSize: 10 }),
-        api.slaByPort(30),
-      ]);
+      const { data: pacote, stale, savedAt } = await withCache(
+        `stats:${topLimit}:${slaQuery}:${slaPage}:${queueUsagePage}`,
+        async () => {
+          const [tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes] = await Promise.all([
+            api.topConsumers(24, topLimit),
+            api.sla({ days: 30, q: slaQuery, page: slaPage, pageSize: 15 }),
+            api.hourlyLoad(7, tzOffsetMinutes),
+            api.anomalies(168),
+            api.queueUsage({ hours: 24, page: queueUsagePage, pageSize: 10 }),
+            api.slaByPort(30),
+          ]);
+          return { tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes };
+        }
+      );
+      setStaleAt(stale ? savedAt : null);
+      const { tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes } = pacote;
       setTopConsumers(tc.items || []);
       setSla(slaData.items || []);
       setSlaMeta(metaOf(slaData));
@@ -78,6 +88,7 @@ export default function StatsScreen() {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={{ padding: 12 }}>
       <ErrorBanner message={error} />
+      <StaleBanner savedAt={staleAt} />
 
       <Card title="Relatório mensal">
         <Text style={styles.muted}>Resumo de uptime, consumo e quedas dos últimos 30 dias, pronto pra imprimir ou salvar em PDF.</Text>

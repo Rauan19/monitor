@@ -3,8 +3,9 @@ import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
-import { Badge, EmptyState, ErrorBanner, LoadingState, Pager } from '../components/common';
+import { Badge, EmptyState, ErrorBanner, LoadingState, Pager, StaleBanner } from '../components/common';
 import { formatDate, relativeAgo } from '../format';
+import { withCache } from '../cache';
 
 const PAGE_SIZE = 20;
 const emptyMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, pages: 1 };
@@ -51,10 +52,14 @@ export default function NotificationsScreen() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [staleAt, setStaleAt] = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const res = await api.notifications({ page, pageSize: PAGE_SIZE });
+      const { data: res, stale, savedAt } = await withCache(`notifications:${page}`, () =>
+        api.notifications({ page, pageSize: PAGE_SIZE })
+      );
+      setStaleAt(stale ? savedAt : null);
       setRows(res.items || []);
       setMeta({ page: res.page || 1, pageSize: res.pageSize || PAGE_SIZE, total: res.total || 0, pages: res.pages || 1 });
       setError('');
@@ -82,6 +87,7 @@ export default function NotificationsScreen() {
   return (
     <View style={styles.screen}>
       <ErrorBanner message={error} />
+      <StaleBanner savedAt={staleAt} />
       {loading ? (
         <LoadingState />
       ) : (
