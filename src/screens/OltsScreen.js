@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
@@ -40,6 +41,7 @@ function PortLabelRow({ port, value, busy, onSave }) {
 }
 
 export default function OltsScreen() {
+  const insets = useSafeAreaInsets();
   const [olts, setOlts] = useState([]);
   const [error, setError] = useState('');
   const [newName, setNewName] = useState('');
@@ -221,7 +223,7 @@ export default function OltsScreen() {
   }
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={{ padding: 12 }}>
+    <ScrollView style={styles.screen} contentContainerStyle={{ padding: 12, paddingBottom: 12 + insets.bottom }}>
       <ErrorBanner message={error} />
 
       <Card title="Equipamentos OLT" count={olts.length}>

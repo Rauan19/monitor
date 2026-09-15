@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
@@ -33,6 +34,7 @@ const chipStyles = StyleSheet.create({
 });
 
 export default function ClientDetailScreen() {
+  const insets = useSafeAreaInsets();
   const route = useRoute();
   const navigation = useNavigation();
   const { sessionKey } = route.params;
@@ -121,7 +123,7 @@ export default function ClientDetailScreen() {
   const bwData = (data?.bandwidth || []).map((b) => ({ value: (b.down_bps || 0) + (b.up_bps || 0) }));
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={{ padding: 12 }}>
+    <ScrollView style={styles.screen} contentContainerStyle={{ padding: 12, paddingBottom: 12 + insets.bottom }}>
       <ErrorBanner message={error} />
       {session && (
         <>

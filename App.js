@@ -6,6 +6,7 @@ import { NavigationContainer, DarkTheme, useNavigationContainerRef } from '@reac
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createDrawerNavigator } from '@react-navigation/drawer';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 import { colors } from './src/theme';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
@@ -20,6 +21,8 @@ import StatsScreen from './src/screens/StatsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import ClientDetailScreen from './src/screens/ClientDetailScreen';
 import OltsScreen from './src/screens/OltsScreen';
+
+const TAB_BAR_HEIGHT = 64; // sem contar o inset da barra do sistema
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -81,6 +84,14 @@ function HeaderBackButton({ navigation }) {
 }
 
 function MainTabs() {
+  // Edge-to-edge e obrigatorio desde o SDK 55: o app desenha por baixo da barra
+  // de navegacao do sistema. Em aparelho com botoes na tela isso engoliria a
+  // barra de abas. O React Navigation somaria o inset sozinho, mas nao quando
+  // tabBarStyle define `height` (BottomTabBar getTabBarHeight retorna antes) nem
+  // quando define `paddingBottom` (o tabBarStyle e espalhado por ultimo e
+  // sobrescreve). Como queremos a barra mais alta que o padrao, somamos aqui.
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={({ route, navigation }) => ({
@@ -88,7 +99,10 @@ function MainTabs() {
         headerTitleStyle: styles.headerTitle,
         headerShadowVisible: false,
         headerLeft: () => <HeaderMenuButton navigation={navigation} />,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: [
+          styles.tabBar,
+          { height: TAB_BAR_HEIGHT + insets.bottom, paddingBottom: 8 + insets.bottom },
+        ],
         tabBarItemStyle: styles.tabBarItem,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.inkFaint,
@@ -213,9 +227,11 @@ function RootNavigator() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <RootNavigator />
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -230,9 +246,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopColor: colors.line,
     borderTopWidth: 1,
-    height: 64,
     paddingTop: 8,
-    paddingBottom: 8,
   },
   tabBarItem: { paddingTop: 2 },
   tabLabelWrap: { alignItems: 'center', justifyContent: 'center', gap: 2, minWidth: 56 },

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
@@ -7,6 +8,7 @@ import { ErrorBanner } from '../components/common';
 import PrimaryButton from '../components/PrimaryButton';
 
 export default function LoginScreen() {
+  const insets = useSafeAreaInsets();
   const { serverUrl, updateServerUrl, login } = useAuth();
   const [url, setUrl] = useState(serverUrl);
   const [testing, setTesting] = useState(false);
@@ -46,7 +48,10 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView style={styles.shell} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: 24 + insets.top, paddingBottom: 24 + insets.bottom }]}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.brand}>
           <Text style={styles.title}>Monitor</Text>
           <Text style={styles.subtitle}>MikroTik PPPoE</Text>
