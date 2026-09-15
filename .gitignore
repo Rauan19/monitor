@@ -11,6 +11,11 @@ server/data/
 *.log
 
 # Firebase (push notifications)
-google-services.json
+# google-services.json NAO entra aqui de proposito: ele precisa ser versionado
+# pro EAS Build achar (o prebuild falha com ENOENT sem ele). O EAS monta o
+# pacote pelas regras do .gitignore, entao uma regra aqui exclui o arquivo do
+# build mesmo estando rastreado pelo git. Nao e segredo: vai embutido no APK e
+# e protegido por nome de pacote + assinatura.
+# As chaves abaixo SAO secretas e ficam fora do git.
 *firebase-adminsdk*.json
 *service-account*.json
