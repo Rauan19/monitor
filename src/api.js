@@ -12,7 +12,8 @@ async function request(path, options = {}) {
   const res = await fetch(`${base}${path}`, {
     ...options,
     headers: {
-      // evita a página de aviso do ngrok free, que devolveria HTML em vez do JSON
+      // mantido porque o endereço do servidor é configurável no app: se apontarem
+      // pra um túnel ngrok em teste local, sem isso vem HTML de aviso em vez de JSON
       'ngrok-skip-browser-warning': 'true',
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -143,6 +144,24 @@ export const api = {
     request('/api/push/register', { method: 'POST', body: JSON.stringify({ token, platform }) }),
   unregisterPushToken: (token) =>
     request('/api/push/unregister', { method: 'POST', body: JSON.stringify({ token }) }),
+  testPushToken: (token) =>
+    request('/api/push/test', { method: 'POST', body: JSON.stringify({ token }) }),
+  notifications: ({ page = 1, pageSize = 20 } = {}) =>
+    request(`/api/notifications?page=${page}&pageSize=${pageSize}`),
+  listOlts: () => request('/api/olts'),
+  createOlt: (name, portCount) =>
+    request('/api/olts', { method: 'POST', body: JSON.stringify({ name, portCount }) }),
+  deleteOlt: (id) => request(`/api/olts/${id}`, { method: 'DELETE' }),
+  setClientOlt: (sessionKey, oltId) =>
+    request('/api/clients/olt', { method: 'POST', body: JSON.stringify({ sessionKey, oltId: oltId || null }) }),
+  portLabels: (oltId = 0) => request(`/api/port-labels?oltId=${oltId}`),
+  setPortLabel: (oltId, port, label) =>
+    request('/api/port-labels', { method: 'POST', body: JSON.stringify({ oltId: oltId || 0, port, label }) }),
+  startPortCalibration: (port, oltId) =>
+    request('/api/port-calibration/start', { method: 'POST', body: JSON.stringify({ port, oltId: oltId || null }) }),
+  portCalibrationStatus: () => request('/api/port-calibration/status'),
+  applyPortCalibration: () => request('/api/port-calibration/apply', { method: 'POST' }),
+  cancelPortCalibration: () => request('/api/port-calibration/cancel', { method: 'POST' }),
   reportUrl: async (days = 30) => {
     const base = await getServerUrl();
     const token = await getToken();

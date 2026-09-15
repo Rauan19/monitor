@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
+import { unregisterPushNotifications } from '../notifications';
 import { clearSession, getServerUrl, getToken, getUsername, setServerUrl as saveServerUrl, setToken, setUsername } from '../storage';
 
 const AuthContext = createContext(null);
@@ -41,6 +42,10 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // Tira o token do servidor ANTES de derrubar a sessão: a rota de unregister
+    // exige autenticação, e sem isso o aparelho deslogado continuaria recebendo
+    // os alertas de queda.
+    await unregisterPushNotifications();
     try {
       await api.logout();
     } catch {

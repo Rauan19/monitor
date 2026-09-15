@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createDrawerNavigator } from '@react-navigation/drawer';
@@ -14,10 +14,12 @@ import DrawerContent from './src/components/DrawerContent';
 import LoginScreen from './src/screens/LoginScreen';
 import ClientsScreen from './src/screens/ClientsScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
+import NotificationsScreen from './src/screens/NotificationsScreen';
 import SystemScreen from './src/screens/SystemScreen';
 import StatsScreen from './src/screens/StatsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import ClientDetailScreen from './src/screens/ClientDetailScreen';
+import OltsScreen from './src/screens/OltsScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -38,6 +40,7 @@ const navTheme = {
 const TAB_ICONS = {
   Clientes: 'people-outline',
   Histórico: 'time-outline',
+  Alertas: 'notifications-outline',
   Sistema: 'hardware-chip-outline',
   Estatísticas: 'stats-chart-outline',
   Ajustes: 'settings-outline',
@@ -46,6 +49,7 @@ const TAB_ICONS = {
 const TAB_ICONS_FOCUSED = {
   Clientes: 'people',
   Histórico: 'time',
+  Alertas: 'notifications',
   Sistema: 'hardware-chip',
   Estatísticas: 'stats-chart',
   Ajustes: 'settings',
@@ -102,6 +106,7 @@ function MainTabs() {
     >
       <Tab.Screen name="Clientes" component={ClientsScreen} />
       <Tab.Screen name="Histórico" component={HistoryScreen} />
+      <Tab.Screen name="Alertas" component={NotificationsScreen} />
       <Tab.Screen name="Sistema" component={SystemScreen} />
       <Tab.Screen name="Estatísticas" component={StatsScreen} />
       <Tab.Screen name="Ajustes" component={SettingsScreen} />
@@ -140,6 +145,13 @@ function DrawerNavigator() {
 function RootNavigator() {
   const { checking, user } = useAuth();
   const registeredFor = useRef(null);
+  const navigationRef = useNavigationContainerRef();
+  const [navReady, setNavReady] = useState(false);
+  // useLastNotificationResponse (em vez de addNotificationResponseReceivedListener)
+  // porque ele também entrega o toque que ABRIU o app do zero. Com o listener
+  // puro, notificação tocada com o app fechado não levava a lugar nenhum.
+  const lastResponse = Notifications.useLastNotificationResponse();
+  const handledNotification = useRef(null);
 
   useEffect(() => {
     if (user && registeredFor.current !== user) {
@@ -149,16 +161,24 @@ function RootNavigator() {
   }, [user]);
 
   useEffect(() => {
-    const sub = Notifications.addNotificationResponseReceivedListener(() => {
-      // Por enquanto só abre o app na aba padrão; dá pra rotear pro cliente/porta específico depois.
-    });
-    return () => sub.remove();
-  }, []);
+    if (!lastResponse || !user || !navReady) return;
+    // Só o toque no corpo da notificação navega (não botões de ação).
+    if (lastResponse.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return;
+
+    const id = lastResponse.notification.request.identifier;
+    if (handledNotification.current === id) return;
+    if (!navigationRef.isReady()) return;
+    handledNotification.current = id;
+
+    // Todo alerta de push (queda em massa, CCR fora do ar, teste) mora na aba
+    // Alertas, que mostra a porta/região e quais clientes caíram.
+    navigationRef.navigate('Main', { screen: 'Tabs', params: { screen: 'Alertas' } });
+  }, [lastResponse, user, navReady, navigationRef]);
 
   if (checking) return null;
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer ref={navigationRef} onReady={() => setNavReady(true)} theme={navTheme}>
       <Stack.Navigator screenOptions={{ headerStyle: styles.header, headerTintColor: colors.ink, headerShadowVisible: false }}>
         {!user ? (
           <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
@@ -170,6 +190,15 @@ function RootNavigator() {
               component={ClientDetailScreen}
               options={({ navigation }) => ({
                 title: 'Cliente',
+                headerTitleStyle: styles.headerTitle,
+                headerLeft: () => <HeaderBackButton navigation={navigation} />,
+              })}
+            />
+            <Stack.Screen
+              name="Olts"
+              component={OltsScreen}
+              options={({ navigation }) => ({
+                title: 'OLTs e portas',
                 headerTitleStyle: styles.headerTitle,
                 headerLeft: () => <HeaderBackButton navigation={navigation} />,
               })}

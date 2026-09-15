@@ -40,7 +40,7 @@ export async function registerForPushNotifications() {
 
   const projectId = Constants.expoConfig?.extra?.eas?.projectId;
   if (!projectId) {
-    console.warn('[push] extra.eas.projectId não configurado — rode "eas init" antes de buildar.');
+    console.warn('[push] extra.eas.projectId não configurado. Rode "eas init" antes de buildar.');
     return null;
   }
 
@@ -55,6 +55,22 @@ export async function registerForPushNotifications() {
   } catch (err) {
     console.warn('[push] falha ao registrar token:', err?.message || err);
     return null;
+  }
+}
+
+/**
+ * Pede pro servidor mandar um push de teste só pra este aparelho. Serve pra
+ * conferir a corrente toda (credencial do Firebase, token, permissão do
+ * Android) sem esperar uma queda real acontecer.
+ */
+export async function sendTestPush() {
+  const token = await getStoredPushToken();
+  if (!token) return { ok: false, error: 'Ative as notificações primeiro' };
+  try {
+    await api.testPushToken(token);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || 'Falha ao enviar teste' };
   }
 }
 

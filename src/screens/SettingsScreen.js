@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { useAuth } from '../context/AuthContext';
-import { registerForPushNotifications, unregisterPushNotifications } from '../notifications';
+import { registerForPushNotifications, sendTestPush, unregisterPushNotifications } from '../notifications';
 import { Card, KeyValue } from '../components/common';
 import PrimaryButton from '../components/PrimaryButton';
 
 export default function SettingsScreen() {
+  const navigation = useNavigation();
   const { serverUrl, updateServerUrl, user, logout } = useAuth();
   const [url, setUrl] = useState(serverUrl);
   const [saving, setSaving] = useState(false);
@@ -33,6 +35,12 @@ export default function SettingsScreen() {
     setPushStatus('Notificações desativadas');
   }
 
+  async function handleTestPush() {
+    setPushStatus('Enviando teste…');
+    const res = await sendTestPush();
+    setPushStatus(res.ok ? 'Push de teste enviado, deve chegar em alguns segundos' : res.error);
+  }
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={{ padding: 12 }}>
       <Card title="Conta">
@@ -54,12 +62,18 @@ export default function SettingsScreen() {
         <PrimaryButton label={saving ? 'Salvando…' : 'Salvar endereço'} onPress={handleSaveUrl} disabled={saving} />
       </Card>
 
+      <Card title="OLTs e portas">
+        <Text style={styles.muted}>Cadastre OLTs (nome + qtd de portas), nomeie cada porta e teste porta (calibração).</Text>
+        <PrimaryButton label="Gerenciar OLTs e portas" onPress={() => navigation.navigate('Olts')} />
+      </Card>
+
       <Card title="Notificações push">
         <Text style={styles.muted}>
           Avisa quando o CCR cai/volta e quando vários clientes da mesma porta ou região caem juntos.
         </Text>
         {pushStatus ? <Text style={styles.status}>{pushStatus}</Text> : null}
         <PrimaryButton label="Ativar notificações" onPress={handleRegisterPush} />
+        <PrimaryButton label="Enviar push de teste" onPress={handleTestPush} />
         <PrimaryButton label="Desativar neste aparelho" onPress={handleDisablePush} tone="danger" />
       </Card>
 

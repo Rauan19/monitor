@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
@@ -7,6 +7,30 @@ import { Badge, ErrorBanner, KeyValue, LoadingState } from '../components/common
 import PrimaryButton from '../components/PrimaryButton';
 import MiniBars from '../components/MiniBars';
 import { formatBps, formatDate } from '../format';
+
+function Chip({ label, active, onPress }) {
+  return (
+    <Pressable onPress={onPress} style={[chipStyles.chip, active && chipStyles.chipActive]}>
+      <Text style={[chipStyles.chipText, active && chipStyles.chipTextActive]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+const chipStyles = StyleSheet.create({
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    marginRight: 6,
+    marginBottom: 6,
+  },
+  chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  chipText: { color: colors.inkSoft, fontSize: 12, fontWeight: '650' },
+  chipTextActive: { color: '#061024' },
+});
 
 export default function ClientDetailScreen() {
   const route = useRoute();
@@ -23,12 +47,15 @@ export default function ClientDetailScreen() {
   const [street, setStreet] = useState('');
   const [neighborhood, setNeighborhood] = useState('');
   const [port, setPort] = useState('');
+  const [oltId, setOltId] = useState(null);
+  const [olts, setOlts] = useState([]);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const res = await api.clientDetail(sessionKey);
+      const [res, oltsRes] = await Promise.all([api.clientDetail(sessionKey), api.listOlts()]);
       setData(res);
+      setOlts(oltsRes.olts || []);
       const s = res.session;
       setAlias(s.alias || '');
       setRegion(s.loc_region || '');
@@ -36,6 +63,7 @@ export default function ClientDetailScreen() {
       setStreet(s.loc_street || '');
       setNeighborhood(s.loc_neighborhood || '');
       setPort(s.ont_port ? String(s.ont_port) : '');
+      setOltId(s.olt_id || null);
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar cliente');
@@ -50,11 +78,14 @@ export default function ClientDetailScreen() {
     }, [load])
   );
 
+  const oltPortCount = oltId ? olts.find((o) => o.id === Number(oltId))?.port_count || 8 : 8;
+
   async function handleSave() {
     setSaving(true);
     try {
       await api.setAlias(sessionKey, alias);
       await api.setLocation(sessionKey, { region, city, street, neighborhood });
+      await api.setClientOlt(sessionKey, oltId || null);
       await api.setPort(sessionKey, port ? Number(port) : null);
       await load();
       Alert.alert('Salvo', 'Dados do cliente atualizados.');
@@ -132,8 +163,35 @@ export default function ClientDetailScreen() {
             <Text style={styles.label}>Rua</Text>
             <TextInput style={styles.input} value={street} onChangeText={setStreet} placeholderTextColor={colors.inkFaint} />
 
-            <Text style={styles.label}>Porta (1-8)</Text>
-            <TextInput style={styles.input} value={port} onChangeText={setPort} keyboardType="number-pad" placeholderTextColor={colors.inkFaint} />
+            <Text style={styles.label}>OLT</Text>
+            <View style={styles.chipRow}>
+              <Chip
+                label="Sem OLT"
+                active={!oltId}
+                onPress={() => {
+                  setOltId(null);
+                  setPort('');
+                }}
+              />
+              {olts.map((o) => (
+                <Chip
+                  key={o.id}
+                  label={o.name}
+                  active={Number(oltId) === o.id}
+                  onPress={() => {
+                    setOltId(o.id);
+                    setPort('');
+                  }}
+                />
+              ))}
+            </View>
+
+            <Text style={styles.label}>Porta</Text>
+            <View style={styles.chipRow}>
+              {Array.from({ length: oltPortCount }, (_, i) => i + 1).map((p) => (
+                <Chip key={p} label={String(p)} active={Number(port) === p} onPress={() => setPort(String(p))} />
+              ))}
+            </View>
 
             <PrimaryButton label={saving ? 'Salvando…' : 'Salvar'} onPress={handleSave} disabled={saving} />
             {!online && <PrimaryButton label="Remover cliente" onPress={handleRemove} tone="danger" />}
@@ -166,6 +224,7 @@ const styles = StyleSheet.create({
   sectionTitle: { color: colors.inkSoft, fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 },
   label: { color: colors.inkFaint, fontSize: 11, fontWeight: '650', marginTop: 8, marginBottom: 4 },
   input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 9, color: colors.ink, fontSize: 13 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap' },
   eventRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.line },
   eventDate: { color: colors.inkFaint, fontSize: 12 },
   muted: { color: colors.inkFaint, fontSize: 13 },
