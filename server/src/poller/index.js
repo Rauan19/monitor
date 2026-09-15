@@ -5,6 +5,7 @@ import { updateBandwidth } from './bandwidth.js';
 import { notifyWebhook } from '../notify.js';
 import { enqueueNotification } from '../notifyQueue.js';
 import { getActiveCalibration } from '../portCalibration.js';
+import { checkLinks } from './links.js';
 
 let timer = null;
 let running = false;
@@ -121,6 +122,12 @@ async function tick() {
       updateBandwidth(counters);
     } catch (bwErr) {
       console.error('[poller] erro ao ler contadores de banda:', bwErr?.message || bwErr);
+    }
+
+    try {
+      await checkLinks();
+    } catch (linkErr) {
+      console.error('[poller] erro ao checar links:', linkErr?.message || linkErr);
     }
   } catch (err) {
     const message = err?.message || String(err);

@@ -529,6 +529,7 @@ select {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  white-space: nowrap; /* "DE PÉ" quebrava em duas linhas em tela estreita */
   gap: 0.28rem;
   font-size: 0.62rem;
   font-weight: 700;
@@ -609,6 +610,60 @@ select {
   color: var(--ink-faint);
   font-size: 0.72rem;
   white-space: nowrap;
+}
+
+.links-board { display: flex; flex-direction: column; gap: 14px; }
+
+.link-row .row-title .mono { font-size: 0.7rem; color: var(--ink-faint); }
+
+.link-downs { color: var(--amber); font-weight: 700; font-size: 0.72rem; }
+
+.link-add-btn {
+  appearance: none;
+  align-self: flex-start;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0.5rem 0.9rem;
+  border-radius: 11px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.link-add-btn:hover:not(:disabled) { background: var(--surface-2); }
+.link-add-btn:disabled { opacity: 0.6; cursor: wait; }
+
+.link-cadastro {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.link-cadastro-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.link-iface .row-meta { gap: 8px; }
+.link-iface .row-meta input {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  color: var(--ink);
+  font-size: 0.75rem;
+  min-width: 190px;
+}
+
+.link-historico h3 {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0 0 8px;
 }
 
 .notification-names {

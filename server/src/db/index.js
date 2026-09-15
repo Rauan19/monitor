@@ -189,6 +189,28 @@ export function getDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
 
+    -- Quais interfaces do CCR sao "link" (uplink, fibra pra POP, radio pra
+    -- torre). O CCR tem centenas de interfaces e cada PPPoE de cliente e uma
+    -- delas: vigiar todas seria puro ruido. So as cadastradas aqui geram alerta.
+    CREATE TABLE IF NOT EXISTS monitored_links (
+      name TEXT PRIMARY KEY,
+      label TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    -- Historico de subida/queda dos links vigiados. Sem isso da pra saber que
+    -- um link esta caido agora, mas nao quando caiu nem quantas vezes piscou.
+    CREATE TABLE IF NOT EXISTS link_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      label TEXT,
+      event_type TEXT NOT NULL CHECK(event_type IN ('down', 'up', 'flap')),
+      link_downs INTEGER,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_link_events_created ON link_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_link_events_name ON link_events(name, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS port_labels (
       olt_id INTEGER NOT NULL DEFAULT 0,
       port INTEGER NOT NULL,
@@ -268,6 +290,91 @@ export function getDb() {
   }
 
   return db;
+}
+
+// ---------------- Links vigiados ----------------
+
+export function listMonitoredLinks() {
+  const database = getDb();
+  return database.prepare(`SELECT name, label FROM monitored_links ORDER BY name`).all();
+}
+
+export function addMonitoredLink(name, label) {
+  const database = getDb();
+  database
+    .prepare(
+      `INSERT INTO monitored_links (name, label, created_at) VALUES (?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET label = excluded.label`
+    )
+    .run(name, label || null, new Date().toISOString());
+  return listMonitoredLinks();
+}
+
+export function removeMonitoredLink(name) {
+  const database = getDb();
+  database.prepare(`DELETE FROM monitored_links WHERE name = ?`).run(name);
+  return listMonitoredLinks();
+}
+
+export function saveLinkEvent({ name, label, eventType, linkDowns }) {
+  const database = getDb();
+  database
+    .prepare(
+      `INSERT INTO link_events (name, label, event_type, link_downs, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(name, label || null, eventType, linkDowns ?? null, new Date().toISOString());
+}
+
+export function listLinkEvents({ hours = 168, name = '', page = 1, pageSize = 20 } = {}) {
+  const database = getDb();
+  const since = hoursAgoIso(hours);
+  const params = [since];
+  let where = `WHERE created_at >= ?`;
+  if (name) {
+    where += ` AND name = ?`;
+    params.push(name);
+  }
+  const total = database.prepare(`SELECT COUNT(*) AS c FROM link_events ${where}`).get(...params).c;
+  const meta = normalizePage(page, pageSize, total);
+  const items = database
+    .prepare(
+      `SELECT id, name, label, event_type, link_downs, created_at
+       FROM link_events ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    )
+    .all(...params, meta.pageSize, meta.offset);
+  return { items, ...meta };
+}
+
+/**
+ * Situacao atual de cada link vigiado: de pe ou caido, desde quando, e quantas
+ * quedas nas ultimas 24h (link que pisca muito e fibra ruim ou radio instavel,
+ * mesmo que no momento esteja de pe).
+ */
+export function getLinkStatus() {
+  const database = getDb();
+  const links = listMonitoredLinks();
+  if (!links.length) return [];
+  const ultimo = database.prepare(
+    `SELECT event_type, created_at FROM link_events WHERE name = ? ORDER BY created_at DESC LIMIT 1`
+  );
+  const quedas = database.prepare(
+    `SELECT COUNT(*) AS c FROM link_events
+     WHERE name = ? AND event_type IN ('down', 'flap') AND created_at >= ?`
+  );
+  const desde24h = hoursAgoIso(24);
+  return links.map((l) => {
+    const ev = ultimo.get(l.name);
+    return {
+      name: l.name,
+      label: l.label,
+      // Sem evento nenhum o link nunca mudou de estado desde que foi cadastrado,
+      // o que na pratica significa que esta de pe.
+      up: ev ? ev.event_type !== 'down' : true,
+      since: ev?.created_at || null,
+      downs24h: quedas.get(l.name, desde24h).c,
+    };
+  });
 }
 
 export function listOlts() {
@@ -1387,6 +1494,7 @@ export function pruneOldData(days = 30) {
   database.prepare(`DELETE FROM system_stats WHERE created_at < ?`).run(cutoff);
   database.prepare(`DELETE FROM bandwidth_samples WHERE created_at < ?`).run(cutoff);
   database.prepare(`DELETE FROM log_events WHERE fetched_at < ?`).run(cutoff);
+  database.prepare(`DELETE FROM link_events WHERE created_at < ?`).run(cutoff);
 
   // O checkpoint automático do SQLite não dá conta quando o servidor fica meses
   // no ar gravando sem parar: o -wal cresce indefinidamente (já chegou a 158 MB

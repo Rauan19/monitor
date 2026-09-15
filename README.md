@@ -105,6 +105,11 @@ npm start
 | `GET /api/export/disconnected.csv?hours=` | Exporta desconexões em CSV |
 | `GET /api/export/events.csv?hours=&type=` | Exporta histórico de eventos em CSV |
 | `GET /api/report/monthly?days=30` | Relatório em HTML pronto pra imprimir/salvar como PDF |
+| `GET /api/links` | Situação de cada link vigiado (de pé/caído, desde quando, quedas em 24h) |
+| `GET /api/links/available` | Interfaces do CCR ainda não vigiadas (pro cadastro) |
+| `POST /api/links` | Passa a vigiar uma interface (`{name, label}`) |
+| `DELETE /api/links/:name` | Para de vigiar |
+| `GET /api/links/events?hours=&name=` | Histórico de quedas, voltas e piscadas |
 | `POST /api/push/register` | Registra um Expo push token (app mobile) |
 | `POST /api/push/unregister` | Remove um Expo push token |
 | `POST /api/push/test` | Dispara um push de teste (corpo opcional `{token}`) |
@@ -144,6 +149,25 @@ No painel web (**Enviar push de teste**, ao lado do botão de notificações) ou
 ```
 POST /api/push/test        # sem corpo: manda pra todos os dispositivos
 POST /api/push/test        # {"token":"..."}: manda só pra esse
+```
+
+### Monitoramento de links (uplink, POP, torre)
+
+Antes, queda de link era descoberta por dedução: o alerta de queda em massa disparava quando vários clientes da mesma porta caíam juntos. Isso diz que algo quebrou, mas não o quê, e só depois dos clientes cairem.
+
+Agora o poller lê `/interface print` a cada ciclo e avisa na hora:
+
+- **Link caiu / voltou**: a interface saiu de `running`. Gera push com prioridade e entra no histórico.
+- **Link piscou**: o contador `link-downs` do RouterOS subiu mas a interface está de pé (caiu e voltou entre duas leituras). Fica registrado sem gerar push: link que pisca é fibra ruim ou rádio instável, e é o tipo de coisa que passa despercebida.
+
+Só as interfaces **cadastradas** geram alerta. O CCR tem centenas de interfaces e cada PPPoE de cliente é uma delas: vigiar todas seria só ruído. Cadastre em **Links → Cadastrar link** (no painel ou no app), dando um apelido a cada uma (`Uplink Vivo`, `Torre Norte`). As PPPoE de cliente já ficam fora da lista de escolha.
+
+Uma queda nova só é considerada a partir da segunda leitura: link que já estava caído antes do servidor subir não gera alerta.
+
+**Limite conhecido:** interface de pé não garante que o equipamento do outro lado está vivo (fibra ok, rádio remoto morto). Para isso é preciso ping, e o usuário do monitor é somente leitura (`!test`). O caminho nesse caso é o netwatch do RouterOS — você cadastra no CCR (precisa de `write`, então é via Winbox) e o monitor lê o resultado:
+
+```routeros
+/tool netwatch add host=10.0.0.2 interval=30s comment="POP Centro"
 ```
 
 ### Autenticação

@@ -144,6 +144,16 @@ export const api = {
   testPushToken: (token) =>
     request('/api/push/test', { method: 'POST', body: JSON.stringify({ token }) }),
   mapPoints: () => request('/api/map'),
+  links: () => request('/api/links'),
+  availableLinks: () => request('/api/links/available'),
+  addLink: (name, label) =>
+    request('/api/links', { method: 'POST', body: JSON.stringify({ name, label }) }),
+  removeLink: (name) => request(`/api/links/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  linkEvents: ({ hours = 168, name = '', page = 1, pageSize = 20 } = {}) => {
+    const p = new URLSearchParams({ hours: String(hours), page: String(page), pageSize: String(pageSize) });
+    if (name) p.set('name', name);
+    return request(`/api/links/events?${p.toString()}`);
+  },
   notifications: ({ page = 1, pageSize = 20 } = {}) =>
     request(`/api/notifications?page=${page}&pageSize=${pageSize}`),
   listOlts: () => request('/api/olts'),

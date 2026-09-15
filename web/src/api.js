@@ -148,6 +148,12 @@ export const api = {
   portLabels: (oltId = 0) => request(`/api/port-labels?oltId=${oltId}`),
   setPortLabel: (oltId, port, label) =>
     request('/api/port-labels', { method: 'POST', body: JSON.stringify({ oltId: oltId || 0, port, label }) }),
+  links: () => request('/api/links'),
+  availableLinks: () => request('/api/links/available'),
+  addLink: (name, label) =>
+    request('/api/links', { method: 'POST', body: JSON.stringify({ name, label }) }),
+  removeLink: (name) => request(`/api/links/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  linkEvents: (hours = 168) => request(`/api/links/events?hours=${hours}&pageSize=30`),
   listOlts: () => request('/api/olts'),
   createOlt: (name, portCount) =>
     request('/api/olts', { method: 'POST', body: JSON.stringify({ name, portCount }) }),

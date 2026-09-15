@@ -29,7 +29,12 @@ import {
   listPortLabels,
   listPushTokens,
   listSystemStats,
+  addMonitoredLink,
+  getLinkStatus,
+  listLinkEvents,
+  listMonitoredLinks,
   registerPushToken,
+  removeMonitoredLink,
   saveNotification,
   removeSession,
   setAlias,
@@ -599,6 +604,62 @@ apiRouter.get('/report/monthly', (req, res) => {
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
+});
+
+// --- Links de transporte (uplink, POP, torre) ---
+
+apiRouter.get('/links', (_req, res) => {
+  res.json({ items: getLinkStatus() });
+});
+
+// Interfaces do CCR que ainda nao estao sendo vigiadas, pro cadastro.
+apiRouter.get('/links/available', async (_req, res) => {
+  try {
+    const todas = await mikrotik.getInterfaces();
+    // getInterfaces engole o erro de leitura e devolve lista vazia. Um CCR nunca
+    // tem zero interfaces, entao lista vazia aqui significa que nao deu pra ler.
+    // Sem essa checagem a tela de cadastro diria "nenhuma interface nova" com o
+    // CCR fora do ar, e o operador acharia que nao tem nada pra cadastrar.
+    if (!todas.length) {
+      return res.status(502).json({ error: 'Não foi possível ler as interfaces do CCR' });
+    }
+    const vigiadas = new Set(listMonitoredLinks().map((l) => l.name));
+    res.json({
+      items: todas
+        .filter((i) => !vigiadas.has(i.name))
+        // PPPoE de cliente e interface tambem, e sao centenas: nao entram na
+        // lista de escolha, senao acha-las e impossivel.
+        .filter((i) => i.type !== 'pppoe-in' && !/^<pppoe-/.test(i.name))
+        .map((i) => ({ name: i.name, type: i.type, running: i.running, linkDowns: i.linkDowns })),
+    });
+  } catch (err) {
+    res.status(502).json({ error: err?.message || 'Não foi possível ler as interfaces do CCR' });
+  }
+});
+
+apiRouter.post('/links', (req, res) => {
+  const { name, label } = req.body || {};
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'name obrigatório' });
+  }
+  if (label != null && typeof label === 'string' && label.length > 120) {
+    return res.status(400).json({ error: 'Nome muito longo (máx. 120 caracteres)' });
+  }
+  res.json({ ok: true, items: addMonitoredLink(name.trim(), label) });
+});
+
+apiRouter.delete('/links/:name', (req, res) => {
+  res.json({ ok: true, items: removeMonitoredLink(req.params.name) });
+});
+
+apiRouter.get('/links/events', (req, res) => {
+  res.json(
+    listLinkEvents({
+      hours: Number(req.query.hours || 168),
+      name: String(req.query.name || '').trim(),
+      ...pageParams(req.query),
+    })
+  );
 });
 
 // --- Notificações push (app mobile) ---

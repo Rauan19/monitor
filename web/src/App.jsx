@@ -89,6 +89,7 @@ const TABS = [
   { id: 'history', label: 'Histórico', hint: 'Eventos' },
   { id: 'notifications', label: 'Notificações', hint: 'Alertas de queda' },
   { id: 'map', label: 'Mapa', hint: 'Por localização' },
+  { id: 'links', label: 'Links', hint: 'Uplink, POP, torre' },
   { id: 'system', label: 'Sistema', hint: 'Saúde do CCR' },
   { id: 'stats', label: 'Estatísticas', hint: 'Gráficos e ranking' },
 ];
@@ -299,6 +300,7 @@ const TAB_ICONS = {
   disconnected: IconDown,
   history: IconHistory,
   notifications: IconBell,
+  links: IconAlert,
   map: IconMap,
   system: IconServer,
   stats: IconChart,
@@ -383,6 +385,11 @@ export default function App() {
   const [editingOlts, setEditingOlts] = useState(false);
   const [oltsBusy, setOltsBusy] = useState(false);
   const [pickingOltId, setPickingOltId] = useState(0);
+  const [links, setLinks] = useState([]);
+  const [linkEvents, setLinkEvents] = useState([]);
+  const [linksDisponiveis, setLinksDisponiveis] = useState(null);
+  const [linksError, setLinksError] = useState('');
+  const [linksBusy, setLinksBusy] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [notificationsMeta, setNotificationsMeta] = useState(emptyMeta);
   const [notificationsPage, setNotificationsPage] = useState(1);
@@ -648,6 +655,60 @@ export default function App() {
       setNotificationsError(err.message || 'Falha ao carregar notificações');
     }
   }, [notificationsPage]);
+
+  const loadLinks = useCallback(async () => {
+    try {
+      const [st, ev] = await Promise.all([api.links(), api.linkEvents(168)]);
+      setLinks(st.items || []);
+      setLinkEvents(ev.items || []);
+      setLinksError('');
+    } catch (err) {
+      setLinksError(err.message || 'Falha ao carregar os links');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user || tab !== 'links') return;
+    loadLinks();
+    const id = setInterval(loadLinks, 15000);
+    return () => clearInterval(id);
+  }, [user, tab, loadLinks]);
+
+  async function handleAbrirCadastroLink() {
+    setLinksBusy(true);
+    setLinksError('');
+    try {
+      const res = await api.availableLinks();
+      setLinksDisponiveis(res.items || []);
+    } catch (err) {
+      setLinksError(err.message || 'Não foi possível ler as interfaces do CCR');
+    } finally {
+      setLinksBusy(false);
+    }
+  }
+
+  async function handleAddLink(name, label) {
+    setLinksBusy(true);
+    try {
+      await api.addLink(name, label || null);
+      setLinksDisponiveis((atual) => (atual || []).filter((i) => i.name !== name));
+      await loadLinks();
+    } catch (err) {
+      setLinksError(err.message || 'Falha ao cadastrar');
+    } finally {
+      setLinksBusy(false);
+    }
+  }
+
+  async function handleRemoveLink(link) {
+    if (!window.confirm(`Deixar de monitorar ${link.label || link.name}?`)) return;
+    try {
+      await api.removeLink(link.name);
+      await loadLinks();
+    } catch (err) {
+      setLinksError(err.message || 'Falha ao remover');
+    }
+  }
 
   useEffect(() => {
     if (!user || tab !== 'notifications') return;
@@ -1346,6 +1407,18 @@ export default function App() {
                 onQueueUsagePage={setQueueUsagePage}
                 onOpenDetail={openClientDetail}
                 error={statsError}
+              />
+            ) : tab === 'links' ? (
+              <LinksBoard
+                links={links}
+                eventos={linkEvents}
+                disponiveis={linksDisponiveis}
+                error={linksError}
+                busy={linksBusy}
+                onAbrirCadastro={handleAbrirCadastroLink}
+                onFecharCadastro={() => setLinksDisponiveis(null)}
+                onAdd={handleAddLink}
+                onRemove={handleRemoveLink}
               />
             ) : tab === 'notifications' ? (
               <NotificationsBoard rows={notifications} error={notificationsError} />
@@ -3059,6 +3132,145 @@ function semTravessao(texto) {
     .replace(/[—–−]/g, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+function LinksBoard({ links, eventos, disponiveis, error, busy, onAbrirCadastro, onFecharCadastro, onAdd, onRemove }) {
+  const [apelidos, setApelidos] = useState({});
+  const caidos = links.filter((l) => !l.up).length;
+
+  return (
+    <div className="links-board">
+      {error && (
+        <div className="banner" role="alert">
+          <strong>Links</strong>
+          <span>{error}</span>
+        </div>
+      )}
+
+      {links.length > 0 && (
+        <p className="muted">
+          {caidos === 0
+            ? `${links.length} ${links.length === 1 ? 'link vigiado' : 'links vigiados'}, todos de pé`
+            : `${caidos} de ${links.length} ${links.length === 1 ? 'link' : 'links'} fora do ar`}
+        </p>
+      )}
+
+      {links.length === 0 ? (
+        <div className="empty">
+          <p>Nenhum link vigiado ainda</p>
+          <span>
+            Cadastre as interfaces de transporte do CCR (uplink, fibra de POP, rádio de torre) pra ser
+            avisado na hora em que uma delas cair.
+          </span>
+        </div>
+      ) : (
+        <ul className="list-stack">
+          {links.map((l) => (
+            <li key={l.name} className={`row-card link-row ${l.up ? '' : 'off'}`}>
+              <div className="row-main">
+                <span className={`badge ${l.up ? 'ok' : 'warn'}`}>
+                  {l.up ? <IconCheck /> : <IconAlert />}
+                  {l.up ? 'De pé' : 'Caído'}
+                </span>
+                <div className="row-title">
+                  <strong className="client-name">{l.label || l.name}</strong>
+                  {l.label && <span className="mono">{l.name}</span>}
+                </div>
+              </div>
+              <div className="row-meta">
+                {l.downs24h > 0 && (
+                  <span className="link-downs">
+                    {l.downs24h} {l.downs24h === 1 ? 'queda' : 'quedas'} em 24h
+                  </span>
+                )}
+                <span title={l.since ? formatDate(l.since) : undefined}>
+                  {l.since ? `${l.up ? 'de pé' : 'caído'} há ${relativeAgo(l.since)}` : 'sem mudança'}
+                </span>
+                <button type="button" className="ghost" onClick={() => onRemove(l)}>
+                  Parar
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {disponiveis == null ? (
+        <button type="button" className="link-add-btn" onClick={onAbrirCadastro} disabled={busy}>
+          {busy ? 'Lendo o CCR…' : 'Cadastrar link'}
+        </button>
+      ) : (
+        <div className="link-cadastro">
+          <div className="link-cadastro-head">
+            <strong>Interfaces do CCR</strong>
+            <button type="button" className="ghost" onClick={onFecharCadastro}>
+              Fechar
+            </button>
+          </div>
+          <p className="muted">
+            Escolha só as de transporte. As PPPoE de cliente já ficam de fora da lista.
+          </p>
+          {disponiveis.length === 0 ? (
+            <p className="muted">Nenhuma interface nova pra cadastrar.</p>
+          ) : (
+            <ul className="list-stack">
+              {disponiveis.map((i) => (
+                <li key={i.name} className="row-card link-iface">
+                  <div className="row-main">
+                    <div className="row-title">
+                      <strong className="mono">{i.name}</strong>
+                      <span>
+                        {i.type}
+                        {i.running ? ' · de pé' : ' · caída'}
+                        {i.linkDowns ? ` · ${i.linkDowns} quedas no CCR` : ''}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="row-meta">
+                    <input
+                      type="text"
+                      placeholder="apelido (ex: Uplink Vivo)"
+                      value={apelidos[i.name] || ''}
+                      onChange={(e) => setApelidos((a) => ({ ...a, [i.name]: e.target.value }))}
+                    />
+                    <button type="button" onClick={() => onAdd(i.name, apelidos[i.name])} disabled={busy}>
+                      Vigiar
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {eventos.length > 0 && (
+        <div className="link-historico">
+          <h3>Últimos eventos</h3>
+          <ul className="list-stack">
+            {eventos.map((ev) => {
+              const tom = ev.event_type === 'up' ? 'ok' : ev.event_type === 'down' ? 'warn' : 'amber';
+              const texto = ev.event_type === 'up' ? 'Voltou' : ev.event_type === 'down' ? 'Caiu' : 'Piscou';
+              return (
+                <li key={ev.id} className="row-card link-evento">
+                  <div className="row-main">
+                    <span className={`badge ${tom}`}>{texto}</span>
+                    <div className="row-title">
+                      <strong className="client-name">{ev.label || ev.name}</strong>
+                      {ev.label && <span className="mono">{ev.name}</span>}
+                    </div>
+                  </div>
+                  <div className="row-meta">
+                    <span title={formatDate(ev.created_at)}>{relativeAgo(ev.created_at)}</span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function NotificationsBoard({ rows, error }) {

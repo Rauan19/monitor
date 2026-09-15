@@ -15,6 +15,7 @@ import DrawerContent from './src/components/DrawerContent';
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import MapScreen from './src/screens/MapScreen';
+import LinksScreen from './src/screens/LinksScreen';
 import ClientsScreen from './src/screens/ClientsScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
@@ -53,6 +54,7 @@ const TAB_ICONS = {
   Estatísticas: 'stats-chart-outline',
   Ajustes: 'settings-outline',
   Mapa: 'map-outline',
+  Links: 'git-network-outline',
 };
 
 const TAB_ICONS_FOCUSED = {
@@ -64,6 +66,7 @@ const TAB_ICONS_FOCUSED = {
   Estatísticas: 'stats-chart',
   Ajustes: 'settings',
   Mapa: 'map',
+  Links: 'git-network',
 };
 
 function HeaderMenuButton({ navigation }) {
@@ -131,6 +134,7 @@ function MainTabs() {
       <Tab.Screen name="Histórico" component={HistoryScreen} />
       <Tab.Screen name="Alertas" component={NotificationsScreen} />
       <Tab.Screen name="Mapa" component={MapScreen} />
+      <Tab.Screen name="Links" component={LinksScreen} options={ABA_OCULTA} />
       <Tab.Screen name="Sistema" component={SystemScreen} options={ABA_OCULTA} />
       {/* Fora da barra de abas: 7 itens em ~375px dariam 53px cada e "Estatísticas"
           nao caberia. Continuam alcancaveis pelo menu lateral, que lista todas. */}
