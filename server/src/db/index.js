@@ -459,7 +459,9 @@ export function listMapPoints() {
   return database
     .prepare(
       `SELECT session_key, name, alias, is_online, ont_port, olt_id,
-              loc_region, loc_neighborhood, loc_city, lat, lng
+              loc_region, loc_neighborhood, loc_city, lat, lng,
+              (SELECT pl.label FROM port_labels pl
+                WHERE pl.olt_id = COALESCE(sessions.olt_id, 0) AND pl.port = sessions.ont_port) AS port_label
        FROM sessions
        WHERE lat IS NOT NULL AND lng IS NOT NULL`
     )
@@ -729,7 +731,9 @@ export function listOnline({ page = 1, pageSize = 20, q = '' } = {}) {
     .prepare(
       `
       SELECT session_key, name, alias, address, caller_id, service, uptime, profile, ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
-             first_seen_at, last_seen_at
+             first_seen_at, last_seen_at,
+             (SELECT pl.label FROM port_labels pl
+                WHERE pl.olt_id = COALESCE(sessions.olt_id, 0) AND pl.port = sessions.ont_port) AS port_label
       FROM sessions
       ${where}
       ORDER BY name COLLATE NOCASE
@@ -762,7 +766,9 @@ export function listDisconnected({
       `
       SELECT session_key, name, alias, address, caller_id, service, uptime, profile,
              ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
-             first_seen_at, last_seen_at, disconnected_at, is_online
+             first_seen_at, last_seen_at, disconnected_at, is_online,
+             (SELECT pl.label FROM port_labels pl
+                WHERE pl.olt_id = COALESCE(sessions.olt_id, 0) AND pl.port = sessions.ont_port) AS port_label
       FROM sessions
       ${where}
       ORDER BY disconnected_at DESC
@@ -853,7 +859,9 @@ export function listAll({
     .prepare(
       `
       SELECT session_key, name, alias, address, caller_id, service, uptime, profile, ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
-             first_seen_at, last_seen_at, disconnected_at, is_online
+             first_seen_at, last_seen_at, disconnected_at, is_online,
+             (SELECT pl.label FROM port_labels pl
+                WHERE pl.olt_id = COALESCE(sessions.olt_id, 0) AND pl.port = sessions.ont_port) AS port_label
       FROM sessions
       ${where}
       ORDER BY is_online DESC, name COLLATE NOCASE
@@ -979,7 +987,14 @@ export function removePushTokens(tokens) {
 
 export function getClientBySessionKey(sessionKey) {
   const database = getDb();
-  return database.prepare(`SELECT * FROM sessions WHERE session_key = ?`).get(sessionKey);
+  return database
+    .prepare(
+      `SELECT *,
+              (SELECT pl.label FROM port_labels pl
+                WHERE pl.olt_id = COALESCE(sessions.olt_id, 0) AND pl.port = sessions.ont_port) AS port_label
+       FROM sessions WHERE session_key = ?`
+    )
+    .get(sessionKey);
 }
 
 export function listEventsForSession(sessionKey, { limit = 20 } = {}) {

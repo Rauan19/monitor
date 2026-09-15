@@ -26,7 +26,14 @@ export default function ClientRow({ row, mode, onPress, oltsPorId }) {
             {oltNome}
           </Text>
         ) : null}
-        {row.ont_port ? <Text style={styles.tag}>Porta {row.ont_port}</Text> : null}
+        {/* A porta e nomeada com a regiao que ela atende, entao o nome diz mais
+            que o numero: mostra "Porta 3 - Centro" quando tem nome. */}
+        {row.ont_port ? (
+          <Text style={styles.tag} numberOfLines={1}>
+            Porta {row.ont_port}
+            {row.port_label ? ` · ${row.port_label}` : ''}
+          </Text>
+        ) : null}
         {loc ? (
           <Text style={styles.tag} numberOfLines={1}>
             {loc}
@@ -72,7 +79,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: radius.pill,
-    maxWidth: 160,
+    maxWidth: 210,
   },
   tagOlt: {
     color: colors.cyan,

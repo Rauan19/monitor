@@ -219,6 +219,16 @@ export default function ClientDetailScreen() {
             <KeyValue label="MAC" value={session.caller_id} />
             <KeyValue label="Perfil" value={session.profile} />
             <KeyValue label="Uptime PPP" value={session.uptime} />
+            <KeyValue
+              label="Porta"
+              value={
+                session.ont_port
+                  ? session.port_label
+                    ? `${session.ont_port} · ${session.port_label}`
+                    : String(session.ont_port)
+                  : null
+              }
+            />
             {data.live && (
               <KeyValue label="Velocidade agora" value={`${formatBps(data.live.downBps)} / ${formatBps(data.live.upBps)}`} />
             )}

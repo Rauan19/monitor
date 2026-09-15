@@ -110,7 +110,7 @@ function montarHtml(pontos, oltsPorId) {
       var nome = p.alias || p.name || 'cliente';
       var meta = [];
       if (p.olt_nome) meta.push('OLT ' + p.olt_nome);
-      if (p.ont_port) meta.push('Porta ' + p.ont_port);
+      if (p.ont_port) meta.push('Porta ' + p.ont_port + (p.port_label ? ' (' + p.port_label + ')' : ''));
       if (p.loc_neighborhood) meta.push(p.loc_neighborhood);
       if (p.loc_city) meta.push(p.loc_city);
       m.bindPopup(

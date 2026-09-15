@@ -1497,7 +1497,12 @@ function ClientDetailDrawer({ data, loading, error, onClose }) {
           <>
             <div className="drawer-badges">
               <span className={`badge ${online ? 'ok' : 'warn'}`}>{online ? 'Online' : 'Offline'}</span>
-              {session.ont_port && <span className="port-badge">Porta {session.ont_port}</span>}
+              {session.ont_port && (
+                <span className="port-badge">
+                  Porta {session.ont_port}
+                  {session.port_label ? ` · ${session.port_label}` : ''}
+                </span>
+              )}
               {loc && <span className="region-tag">{loc}</span>}
             </div>
 
@@ -1820,7 +1825,11 @@ function PortTag({ row, onSetPort, onSetOlt, olts = [] }) {
           <option value="">Sem porta</option>
           {Array.from({ length: portCount }, (_, i) => i + 1).map((p) => (
             <option key={p} value={p}>
+              {/* A porta e nomeada com a regiao que atende. O nome vai na opcao
+                  selecionada pra aparecer com o seletor fechado, que e onde o
+                  operador le a informacao. */}
               Porta {p}
+              {p === Number(row.ont_port) && row.port_label ? ` · ${row.port_label}` : ''}
             </option>
           ))}
         </select>
@@ -2817,7 +2826,7 @@ function MapBoard({ points, error, onOpenDetail, onRefresh }) {
   const filtered = points.filter((p) => {
     if (!query.trim()) return true;
     const q = query.trim().toLowerCase();
-    return [p.name, p.alias, p.loc_region, p.loc_neighborhood, p.loc_city, p.ont_port ? `porta ${p.ont_port}` : '']
+    return [p.name, p.alias, p.loc_region, p.loc_neighborhood, p.loc_city, p.port_label, p.ont_port ? `porta ${p.ont_port}` : '']
       .filter(Boolean)
       .some((v) => String(v).toLowerCase().includes(q));
   });
@@ -2888,7 +2897,7 @@ function MapBoard({ points, error, onOpenDetail, onRefresh }) {
       const parts = [p.loc_neighborhood, p.loc_city].filter(Boolean).join(', ');
       const popupHtml = `
         <strong>${label}</strong><br/>${online ? 'Online' : 'Offline'}${
-        p.ont_port ? ` · Porta ${p.ont_port}` : ''
+        p.ont_port ? ` · Porta ${p.ont_port}${p.port_label ? ` (${p.port_label})` : ''}` : ''
       }${parts ? `<br/>${parts}` : ''}
         <br/><a class="popup-route" href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" rel="noreferrer">Abrir rota →</a>
       `;
