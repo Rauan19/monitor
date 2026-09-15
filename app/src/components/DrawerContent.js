@@ -10,6 +10,7 @@ const MENU_ITEMS = [
   { name: 'Clientes', icon: 'people-outline', iconActive: 'people' },
   { name: 'Histórico', icon: 'time-outline', iconActive: 'time' },
   { name: 'Alertas', icon: 'notifications-outline', iconActive: 'notifications' },
+  { name: 'Mapa', icon: 'map-outline', iconActive: 'map' },
   { name: 'Sistema', icon: 'hardware-chip-outline', iconActive: 'hardware-chip' },
   { name: 'Estatísticas', icon: 'stats-chart-outline', iconActive: 'stats-chart' },
   { name: 'Ajustes', icon: 'settings-outline', iconActive: 'settings' },

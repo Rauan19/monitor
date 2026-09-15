@@ -458,7 +458,8 @@ export function listMapPoints() {
   const database = getDb();
   return database
     .prepare(
-      `SELECT session_key, name, alias, is_online, ont_port, loc_region, loc_neighborhood, loc_city, lat, lng
+      `SELECT session_key, name, alias, is_online, ont_port, olt_id,
+              loc_region, loc_neighborhood, loc_city, lat, lng
        FROM sessions
        WHERE lat IS NOT NULL AND lng IS NOT NULL`
     )

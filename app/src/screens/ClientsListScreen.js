@@ -31,6 +31,7 @@ export default function ClientsListScreen({ mode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [staleAt, setStaleAt] = useState(null);
+  const [oltsPorId, setOltsPorId] = useState({});
   const focused = useRef(true);
 
   const load = useCallback(async () => {
@@ -53,6 +54,24 @@ export default function ClientsListScreen({ mode }) {
   useEffect(() => {
     setPage(1);
   }, [query]);
+
+  useEffect(() => {
+    // O cadastro de OLTs muda raramente, entao busca uma vez em vez de vir
+    // junto do polling da lista.
+    let ativo = true;
+    api
+      .listOlts()
+      .then((res) => {
+        if (!ativo) return;
+        const mapa = {};
+        for (const o of res.olts || []) mapa[o.id] = o.name;
+        setOltsPorId(mapa);
+      })
+      .catch(() => {});
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -82,7 +101,7 @@ export default function ClientsListScreen({ mode }) {
           data={rows}
           keyExtractor={(item) => item.session_key}
           renderItem={({ item }) => (
-            <ClientRow row={item} mode={mode} onPress={() => navigation.navigate('ClientDetail', { sessionKey: item.session_key })} />
+            <ClientRow oltsPorId={oltsPorId} row={item} mode={mode} onPress={() => navigation.navigate('ClientDetail', { sessionKey: item.session_key })} />
           )}
           ListEmptyComponent={<EmptyState title={copy.title} hint={copy.hint} />}
           ListFooterComponent={<Pager meta={meta} onChange={setPage} />}

@@ -3,10 +3,13 @@ import { colors, radius } from '../theme';
 import { Badge } from './common';
 import { formatBps, relativeAgo, locationSummary } from '../format';
 
-export default function ClientRow({ row, mode, onPress }) {
+export default function ClientRow({ row, mode, onPress, oltsPorId }) {
   const online = mode === 'online' ? true : Number(row.is_online) === 1;
   const loc = locationSummary(row);
   const displayName = row.alias || row.name || '—';
+  // A lista recebe olt_id do servidor, nao o nome. O nome sai do cadastro de
+  // OLTs, que a tela busca uma vez e passa aqui como mapa id -> nome.
+  const oltNome = row.olt_id ? oltsPorId?.[Number(row.olt_id)] : null;
 
   return (
     <Pressable style={({ pressed }) => [styles.row, pressed && styles.rowPressed, !online && styles.rowOff]} onPress={onPress}>
@@ -18,6 +21,11 @@ export default function ClientRow({ row, mode, onPress }) {
       </View>
       <View style={styles.metaRow}>
         <Text style={styles.mono}>{row.address || 'sem IP'}</Text>
+        {oltNome ? (
+          <Text style={styles.tagOlt} numberOfLines={1}>
+            {oltNome}
+          </Text>
+        ) : null}
         {row.ont_port ? <Text style={styles.tag}>Porta {row.ont_port}</Text> : null}
         {loc ? (
           <Text style={styles.tag} numberOfLines={1}>
@@ -65,6 +73,16 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: radius.pill,
     maxWidth: 160,
+  },
+  tagOlt: {
+    color: colors.cyan,
+    backgroundColor: colors.cyanBg,
+    fontSize: 11,
+    fontWeight: '650',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    maxWidth: 140,
   },
   bottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   speed: { color: colors.cyan, fontSize: 12, fontFamily: 'monospace' },

@@ -143,6 +143,7 @@ export const api = {
     request('/api/push/unregister', { method: 'POST', body: JSON.stringify({ token }) }),
   testPushToken: (token) =>
     request('/api/push/test', { method: 'POST', body: JSON.stringify({ token }) }),
+  mapPoints: () => request('/api/map'),
   notifications: ({ page = 1, pageSize = 20 } = {}) =>
     request(`/api/notifications?page=${page}&pageSize=${pageSize}`),
   listOlts: () => request('/api/olts'),
