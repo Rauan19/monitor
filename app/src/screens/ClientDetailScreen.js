@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Location from 'expo-location';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
@@ -52,6 +53,11 @@ export default function ClientDetailScreen() {
   const [oltId, setOltId] = useState(null);
   const [olts, setOlts] = useState([]);
   const [saving, setSaving] = useState(false);
+  // Coordenada guardada como texto pra poder ser digitada a mao tambem, nao so
+  // capturada por GPS (as vezes o tecnico ja tem a coordenada de outro lugar).
+  const [lat, setLat] = useState('');
+  const [lng, setLng] = useState('');
+  const [gps, setGps] = useState({ ocupado: false, erro: '' });
 
   const load = useCallback(async () => {
     try {
@@ -66,6 +72,8 @@ export default function ClientDetailScreen() {
       setNeighborhood(s.loc_neighborhood || '');
       setPort(s.ont_port ? String(s.ont_port) : '');
       setOltId(s.olt_id || null);
+      setLat(s.lat != null ? String(s.lat) : '');
+      setLng(s.lng != null ? String(s.lng) : '');
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar cliente');
@@ -82,11 +90,84 @@ export default function ClientDetailScreen() {
 
   const oltPortCount = oltId ? olts.find((o) => o.id === Number(oltId))?.port_count || 8 : 8;
 
+  /**
+   * Pega a coordenada do aparelho. Aqui o app leva vantagem sobre o painel web:
+   * quem esta instalando esta na casa do cliente com o celular na mao, entao a
+   * coordenada sai certa. So preenche os campos, nao salva sozinho, pra dar
+   * chance de conferir antes.
+   */
+  async function handleGps() {
+    setGps({ ocupado: true, erro: '' });
+    try {
+      const atual = await Location.getForegroundPermissionsAsync();
+      let status = atual.status;
+      if (status !== 'granted') {
+        // Mesmo caso da permissao de notificacao: quando o Android fecha a
+        // porta, pedir de novo nao abre dialogo, so devolve 'denied'.
+        if (!atual.canAskAgain) {
+          setGps({
+            ocupado: false,
+            erro: 'Permissao de localizacao negada. Libere em Ajustes do sistema.',
+          });
+          return;
+        }
+        const pedido = await Location.requestForegroundPermissionsAsync();
+        status = pedido.status;
+      }
+      if (status !== 'granted') {
+        setGps({ ocupado: false, erro: 'Sem permissao de localizacao.' });
+        return;
+      }
+
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+      setLat(pos.coords.latitude.toFixed(6));
+      setLng(pos.coords.longitude.toFixed(6));
+      const precisao = pos.coords.accuracy != null ? ` (precisao ~${Math.round(pos.coords.accuracy)}m)` : '';
+      setGps({ ocupado: false, erro: '' });
+      Alert.alert(
+        'Localizacao capturada',
+        `Coordenada preenchida${precisao}. Confira e toque em Salvar pra gravar no cliente.`
+      );
+    } catch (err) {
+      setGps({ ocupado: false, erro: err?.message || 'Nao foi possivel pegar a localizacao' });
+    }
+  }
+
+  function handleLimparCoord() {
+    setLat('');
+    setLng('');
+  }
+
+  /** Abre a coordenada no app de mapas do celular, pra conferir ou navegar. */
+  function handleAbrirNoMapa() {
+    const la = lat.trim();
+    const lo = lng.trim();
+    if (!la || !lo) return;
+    const nome = encodeURIComponent(alias || data?.session?.name || 'Cliente');
+    Linking.openURL(`geo:${la},${lo}?q=${la},${lo}(${nome})`).catch(() => {
+      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${la},${lo}`).catch(() => {});
+    });
+  }
+
   async function handleSave() {
     setSaving(true);
     try {
       await api.setAlias(sessionKey, alias);
-      await api.setLocation(sessionKey, { region, city, street, neighborhood });
+      // lat/lng vao juntos ou nao vao: o servidor so mexe nas colunas quando
+      // recebe os dois, entao mandar um sem o outro nao faria nada. Campo vazio
+      // vira null de proposito, pra dar pra apagar uma coordenada errada.
+      const temCoord = lat.trim() !== '' && lng.trim() !== '';
+      const semCoord = lat.trim() === '' && lng.trim() === '';
+      await api.setLocation(sessionKey, {
+        region,
+        city,
+        street,
+        neighborhood,
+        ...(temCoord ? { lat: Number(lat), lng: Number(lng) } : {}),
+        ...(semCoord ? { lat: null, lng: null } : {}),
+      });
       await api.setClientOlt(sessionKey, oltId || null);
       await api.setPort(sessionKey, port ? Number(port) : null);
       await load();
@@ -165,6 +246,44 @@ export default function ClientDetailScreen() {
             <Text style={styles.label}>Rua</Text>
             <TextInput style={styles.input} value={street} onChangeText={setStreet} placeholderTextColor={colors.inkFaint} />
 
+            <Text style={styles.label}>Coordenada</Text>
+            <View style={styles.coordRow}>
+              <TextInput
+                style={[styles.input, styles.coordInput]}
+                value={lat}
+                onChangeText={setLat}
+                placeholder="latitude"
+                placeholderTextColor={colors.inkFaint}
+                keyboardType="numbers-and-punctuation"
+                autoCorrect={false}
+              />
+              <TextInput
+                style={[styles.input, styles.coordInput]}
+                value={lng}
+                onChangeText={setLng}
+                placeholder="longitude"
+                placeholderTextColor={colors.inkFaint}
+                keyboardType="numbers-and-punctuation"
+                autoCorrect={false}
+              />
+            </View>
+            <PrimaryButton
+              label={gps.ocupado ? 'Pegando localizacao...' : lat || lng ? 'Atualizar pelo GPS' : 'Usar minha localizacao (GPS)'}
+              onPress={handleGps}
+              disabled={gps.ocupado}
+            />
+            {lat.trim() && lng.trim() ? (
+              <View style={styles.coordAcoes}>
+                <Pressable onPress={handleAbrirNoMapa} hitSlop={8}>
+                  <Text style={styles.link}>Abrir no mapa</Text>
+                </Pressable>
+                <Pressable onPress={handleLimparCoord} hitSlop={8}>
+                  <Text style={styles.linkDanger}>Limpar coordenada</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {gps.erro ? <Text style={styles.gpsErro}>{gps.erro}</Text> : null}
+
             <Text style={styles.label}>OLT</Text>
             <View style={styles.chipRow}>
               <Chip
@@ -219,6 +338,12 @@ export default function ClientDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  coordRow: { flexDirection: 'row', gap: 8 },
+  coordInput: { flex: 1 },
+  coordAcoes: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, marginBottom: 2 },
+  link: { color: colors.accent, fontSize: 12, fontWeight: '700' },
+  linkDanger: { color: colors.bad, fontSize: 12, fontWeight: '700' },
+  gpsErro: { color: colors.bad, fontSize: 12, marginTop: 6 },
   screen: { flex: 1, backgroundColor: colors.bg },
   headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   uptime: { color: colors.inkSoft, fontSize: 12, fontWeight: '650' },
