@@ -6,6 +6,7 @@ import { colors, radius } from '../theme';
 import { useAuth } from '../context/AuthContext';
 
 const MENU_ITEMS = [
+  { name: 'Início', icon: 'home-outline', iconActive: 'home' },
   { name: 'Clientes', icon: 'people-outline', iconActive: 'people' },
   { name: 'Histórico', icon: 'time-outline', iconActive: 'time' },
   { name: 'Alertas', icon: 'notifications-outline', iconActive: 'notifications' },

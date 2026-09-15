@@ -13,6 +13,7 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { registerForPushNotifications } from './src/notifications';
 import DrawerContent from './src/components/DrawerContent';
 import LoginScreen from './src/screens/LoginScreen';
+import HomeScreen from './src/screens/HomeScreen';
 import ClientsScreen from './src/screens/ClientsScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
@@ -23,6 +24,8 @@ import ClientDetailScreen from './src/screens/ClientDetailScreen';
 import OltsScreen from './src/screens/OltsScreen';
 
 const TAB_BAR_HEIGHT = 64; // sem contar o inset da barra do sistema
+
+const ABA_OCULTA = { tabBarItemStyle: { display: 'none' } };
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -41,6 +44,7 @@ const navTheme = {
 };
 
 const TAB_ICONS = {
+  Início: 'home-outline',
   Clientes: 'people-outline',
   Histórico: 'time-outline',
   Alertas: 'notifications-outline',
@@ -50,6 +54,7 @@ const TAB_ICONS = {
 };
 
 const TAB_ICONS_FOCUSED = {
+  Início: 'home',
   Clientes: 'people',
   Histórico: 'time',
   Alertas: 'notifications',
@@ -118,12 +123,15 @@ function MainTabs() {
         ),
       })}
     >
+      <Tab.Screen name="Início" component={HomeScreen} />
       <Tab.Screen name="Clientes" component={ClientsScreen} />
       <Tab.Screen name="Histórico" component={HistoryScreen} />
       <Tab.Screen name="Alertas" component={NotificationsScreen} />
       <Tab.Screen name="Sistema" component={SystemScreen} />
-      <Tab.Screen name="Estatísticas" component={StatsScreen} />
-      <Tab.Screen name="Ajustes" component={SettingsScreen} />
+      {/* Fora da barra de abas: 7 itens em ~375px dariam 53px cada e "Estatísticas"
+          nao caberia. Continuam alcancaveis pelo menu lateral, que lista todas. */}
+      <Tab.Screen name="Estatísticas" component={StatsScreen} options={ABA_OCULTA} />
+      <Tab.Screen name="Ajustes" component={SettingsScreen} options={ABA_OCULTA} />
     </Tab.Navigator>
   );
 }
