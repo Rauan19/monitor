@@ -896,34 +896,55 @@ export function listEvents({
 } = {}) {
   const database = getDb();
   const params = [hoursAgoIso(hours)];
-  let where = `WHERE created_at >= ?`;
+  // Colunas prefixadas com e.: sessions tem name, address e alias tambem, e sem
+  // o prefixo o JOIN abaixo deixaria a referencia ambigua.
+  let where = `WHERE e.created_at >= ?`;
 
   if (type === 'connected' || type === 'disconnected') {
-    where += ` AND event_type = ?`;
+    where += ` AND e.event_type = ?`;
     params.push(type);
   }
 
   if (q) {
+    // A busca tambem acha pelo apelido e pelo nome da porta, que e a regiao:
+    // procurar "Centro" no historico passa a trazer as quedas daquela porta.
     where += ` AND (
-      name LIKE ? OR
-      IFNULL(address, '') LIKE ? OR
-      IFNULL(caller_id, '') LIKE ?
+      e.name LIKE ? OR
+      IFNULL(e.address, '') LIKE ? OR
+      IFNULL(e.caller_id, '') LIKE ? OR
+      IFNULL(s.alias, '') LIKE ? OR
+      IFNULL((SELECT pl.label FROM port_labels pl
+               WHERE pl.olt_id = COALESCE(s.olt_id, 0) AND pl.port = s.ont_port), '') LIKE ?
     )`;
     const like = `%${q}%`;
-    params.push(like, like, like);
+    params.push(like, like, like, like, like);
   }
 
   const total = database
-    .prepare(`SELECT COUNT(*) AS c FROM events ${where}`)
+    .prepare(
+      `SELECT COUNT(*) AS c FROM events e
+       LEFT JOIN sessions s ON s.session_key = e.session_key ${where}`
+    )
     .get(...params).c;
   const meta = normalizePage(page, pageSize, total);
   const items = database
     .prepare(
       `
-      SELECT id, session_key, name, address, caller_id, event_type, created_at
-      FROM events
+      SELECT e.id, e.session_key, e.name, e.address, e.caller_id, e.event_type, e.created_at,
+             s.alias, s.ont_port, s.olt_id, s.is_online,
+             s.loc_region, s.loc_neighborhood, s.loc_city,
+             (SELECT o.name FROM olts o WHERE o.id = s.olt_id) AS olt_name,
+             (SELECT pl.label FROM port_labels pl
+               WHERE pl.olt_id = COALESCE(s.olt_id, 0) AND pl.port = s.ont_port) AS port_label
+      FROM events e
+      -- Porta, OLT e localizacao ficam em sessions, nao no evento: o evento
+      -- guarda so o retrato do momento (nome, IP, MAC). O LEFT JOIN traz a
+      -- situacao ATUAL do cliente, que e o que interessa pra quem esta lendo o
+      -- historico ("esse que caiu fica em qual porta?"). LEFT porque cliente
+      -- removido deixa os eventos dele no historico.
+      LEFT JOIN sessions s ON s.session_key = e.session_key
       ${where}
-      ORDER BY created_at DESC
+      ORDER BY e.created_at DESC
       LIMIT ? OFFSET ?
     `
     )

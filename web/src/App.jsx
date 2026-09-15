@@ -1423,7 +1423,7 @@ export default function App() {
             ) : tab === 'notifications' ? (
               <NotificationsBoard rows={notifications} error={notificationsError} />
             ) : (
-              <EventBoard rows={events} />
+              <EventBoard rows={events} onOpenDetail={openClientDetail} />
             )}
 
             {tab === 'notifications' && !loading && notificationsMeta.total > 0 && (
@@ -3072,7 +3072,7 @@ function MapBoard({ points, error, onOpenDetail, onRefresh }) {
   );
 }
 
-function EventBoard({ rows }) {
+function EventBoard({ rows, onOpenDetail }) {
   if (!rows.length) {
     return (
       <div className="empty">
@@ -3086,22 +3086,53 @@ function EventBoard({ rows }) {
     <ul className="list-stack">
       {rows.map((row) => {
         const down = row.event_type === 'disconnected';
+        const nome = row.alias || row.name;
+        const local = [row.loc_neighborhood, row.loc_city].filter(Boolean).join(', ');
         return (
-          <li key={row.id} className={`row-card ${down ? 'off' : 'on'}`}>
+          <li
+            key={row.id}
+            className={`row-card event-row ${down ? 'off' : 'on'}`}
+            onClick={() => onOpenDetail?.(row.session_key)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onOpenDetail?.(row.session_key);
+              }
+            }}
+          >
             <div className="row-main">
               <span className={`badge ${down ? 'warn' : 'ok'}`}>
                 {down ? 'Desconectou' : 'Conectou'}
               </span>
               <div className="row-title">
                 <strong className="client-name" title={row.name}>
-                  {row.name || '—'}
+                  {nome || '—'}
                 </strong>
-                <span className="mono">{row.address || 'sem IP'}</span>
+                <span className="event-tags">
+                  {row.olt_name && <span className="event-tag olt">{row.olt_name}</span>}
+                  {row.ont_port && (
+                    <span className="event-tag porta">
+                      Porta {row.ont_port}
+                      {row.port_label ? ` · ${row.port_label}` : ''}
+                    </span>
+                  )}
+                  {local && <span className="event-tag local">{local}</span>}
+                  <span className="mono">{row.address || 'sem IP'}</span>
+                </span>
               </div>
             </div>
             <div className="row-meta">
+              {/* Situacao de agora: um evento de queda de 3h atras pode ser de
+                  um cliente que ja voltou, e isso muda a urgencia. */}
+              {row.is_online != null && (
+                <span className={row.is_online ? 'event-agora on' : 'event-agora off'}>
+                  {row.is_online ? 'online agora' : 'offline agora'}
+                </span>
+              )}
               <CopyMac value={row.caller_id} />
-              <span>{formatDate(row.created_at)}</span>
+              <span title={formatDate(row.created_at)}>{relativeAgo(row.created_at)}</span>
             </div>
           </li>
         );

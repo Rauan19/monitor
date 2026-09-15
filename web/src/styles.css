@@ -612,6 +612,28 @@ select {
   white-space: nowrap;
 }
 
+.event-row { cursor: pointer; }
+.event-row:hover { background: var(--surface-2); }
+.event-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.event-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+.event-tag {
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.event-tag.olt { color: var(--cyan-ink, #0e7490); background: var(--cyan-bg, rgba(34,211,238,0.14)); }
+.event-tag.porta { color: var(--violet-ink, #6d28d9); background: var(--violet-bg, rgba(167,139,250,0.16)); }
+.event-tag.local { color: var(--ink-soft); background: var(--surface-2); }
+
+.event-agora { font-size: 0.68rem; font-weight: 700; }
+.event-agora.on { color: var(--ok-ink); }
+.event-agora.off { color: var(--bad); }
+
 .links-board { display: flex; flex-direction: column; gap: 14px; }
 
 .link-row .row-title .mono { font-size: 0.7rem; color: var(--ink-faint); }
