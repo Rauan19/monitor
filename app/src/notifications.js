@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
@@ -14,12 +14,27 @@ Notifications.setNotificationHandler({
   }),
 });
 
+/** Situacao atual da permissao, sem abrir nenhum dialogo. */
+export async function getPermissionStatus() {
+  if (!Device.isDevice) return { status: 'emulador', podePedir: false, concedida: false };
+  const { status, canAskAgain } = await Notifications.getPermissionsAsync();
+  return { status, podePedir: canAskAgain, concedida: status === 'granted' };
+}
+
 /**
- * Pede permissão, pega o Expo push token e registra no servidor.
- * Se não tiver projectId (EAS) configurado ainda, ou não for um device físico, não faz nada.
+ * Pede permissao, pega o Expo push token e registra no servidor.
+ *
+ * Devolve um resultado descritivo em vez de token-ou-null, porque cada motivo
+ * de falha pede uma acao diferente do usuario: permissao negada de forma
+ * definitiva so se resolve nos ajustes do Android, projectId faltando so se
+ * resolve rebuildando, e servidor fora do ar e so tentar de novo depois. Antes
+ * tudo isso virava um "nao foi possivel ativar (veja o console)", que nao ajuda
+ * ninguem que esta com o celular na mao.
  */
-export async function registerForPushNotifications() {
+export async function registerForPushNotifications({ pedirPermissao = true } = {}) {
   if (Platform.OS === 'android') {
+    // O canal tem que existir antes de qualquer notificacao chegar, senao o
+    // Android usa o padrao e ignora importancia/vibracao configuradas aqui.
     await Notifications.setNotificationChannelAsync('default', {
       name: 'Alertas do Monitor',
       importance: Notifications.AndroidImportance.MAX,
@@ -28,20 +43,34 @@ export async function registerForPushNotifications() {
     });
   }
 
-  if (!Device.isDevice) return null;
-
-  const { status: existing } = await Notifications.getPermissionsAsync();
-  let finalStatus = existing;
-  if (existing !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
+  if (!Device.isDevice) {
+    return { ok: false, motivo: 'emulador' };
   }
-  if (finalStatus !== 'granted') return null;
+
+  const { status: atual, canAskAgain } = await Notifications.getPermissionsAsync();
+  let status = atual;
+
+  if (status !== 'granted') {
+    // Nao insiste quando o Android ja fechou a porta: chamar
+    // requestPermissionsAsync nesse estado nao abre dialogo nenhum e devolve
+    // 'denied' na hora, o que pareceria um bug pro usuario ("apertei e nao
+    // aconteceu nada"). Nesse caso o caminho e os ajustes do sistema.
+    if (!canAskAgain) {
+      return { ok: false, motivo: 'negada-definitivo' };
+    }
+    if (!pedirPermissao) {
+      return { ok: false, motivo: 'nao-concedida-ainda' };
+    }
+    const pedido = await Notifications.requestPermissionsAsync();
+    status = pedido.status;
+    if (status !== 'granted') {
+      return { ok: false, motivo: pedido.canAskAgain ? 'negada' : 'negada-definitivo' };
+    }
+  }
 
   const projectId = Constants.expoConfig?.extra?.eas?.projectId;
   if (!projectId) {
-    console.warn('[push] extra.eas.projectId não configurado. Rode "eas init" antes de buildar.');
-    return null;
+    return { ok: false, motivo: 'sem-projectid' };
   }
 
   try {
@@ -51,10 +80,19 @@ export async function registerForPushNotifications() {
       await api.registerPushToken(token, Platform.OS);
       await setStoredPushToken(token);
     }
-    return token;
+    return { ok: true, token };
   } catch (err) {
-    console.warn('[push] falha ao registrar token:', err?.message || err);
-    return null;
+    return { ok: false, motivo: 'falha-registro', erro: err?.message || String(err) };
+  }
+}
+
+/** Abre a tela de ajustes do proprio app, onde da pra reativar a permissao. */
+export async function abrirAjustesDoSistema() {
+  try {
+    await Linking.openSettings();
+    return true;
+  } catch {
+    return false;
   }
 }
 

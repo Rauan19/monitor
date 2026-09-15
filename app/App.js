@@ -178,6 +178,9 @@ function RootNavigator() {
   useEffect(() => {
     if (user && registeredFor.current !== user) {
       registeredFor.current = user;
+      // Pede no primeiro login porque receber alerta de queda e o proposito do
+      // app. Se o usuario negar, nao insiste em nenhum login seguinte: quem
+      // decide reativar e ele, em Ajustes.
       registerForPushNotifications();
     }
   }, [user]);
