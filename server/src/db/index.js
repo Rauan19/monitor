@@ -5,6 +5,81 @@ import { config } from '../config.js';
 
 let db;
 
+/**
+ * Indices de cobertura de bandwidth_samples, criados fora do schema principal e
+ * NUNCA fatais.
+ *
+ * Eles sao otimizacao, nao requisito: sem eles o monitor funciona, so consulta
+ * mais devagar. Mas criar indice em 750 mil linhas e rodar VACUUM fazem o
+ * arquivo crescer temporariamente (162 MB -> 239 MB antes do VACUUM, e o VACUUM
+ * escreve uma copia inteira, exigindo ~2x o tamanho livre em disco). Num VPS
+ * apertado isso estoura, e como getDb() roda na subida do servidor, um erro
+ * aqui derrubava o processo inteiro: o monitor ficava fora do ar por causa de
+ * uma otimizacao. Agora cada etapa falha em silencio com log, e o servidor sobe.
+ */
+function migrarIndicesDeBanda(db) {
+  const tinhaIndiceAntigo = db
+    .prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'index'
+        AND name IN ('idx_bw_samples_client_time', 'idx_bw_samples_time')`
+    )
+    .get();
+
+  // Por data: janela recente de todos os clientes (top consumidores, filas).
+  // Por cliente: agrupar por cliente e a ficha de um cliente so.
+  const indices = [
+    ['idx_bw_cobertura', 'bandwidth_samples(created_at, client_name, down_bps, up_bps)'],
+    ['idx_bw_cobertura_cliente', 'bandwidth_samples(client_name, created_at, down_bps, up_bps)'],
+  ];
+  let todosCriados = true;
+  for (const [nome, definicao] of indices) {
+    try {
+      db.exec(`CREATE INDEX IF NOT EXISTS ${nome} ON ${definicao}`);
+    } catch (err) {
+      todosCriados = false;
+      console.error(
+        `[db] nao foi possivel criar o indice ${nome} (${err?.message || err}). ` +
+          'O monitor segue funcionando, as estatisticas de banda so ficam mais lentas.'
+      );
+    }
+  }
+
+  // Os antigos sao prefixo dos novos, entao so ocupam disco. Se os novos nao
+  // foram criados, mantem os antigos: sem indice nenhum seria bem pior.
+  if (!todosCriados) return;
+  try {
+    db.exec(`DROP INDEX IF EXISTS idx_bw_samples_client_time`);
+    db.exec(`DROP INDEX IF EXISTS idx_bw_samples_time`);
+  } catch (err) {
+    console.error(`[db] falha ao remover indices antigos: ${err?.message || err}`);
+    return;
+  }
+
+  if (!tinhaIndiceAntigo) return;
+
+  // So na primeira subida depois da migracao, nunca de novo. Sem isso as
+  // paginas dos indices derrubados ficam como espaco livre dentro do arquivo.
+  console.log('[db] migrando indices de banda (ANALYZE + VACUUM, pode levar alguns segundos)...');
+  const inicio = Date.now();
+  try {
+    db.exec(`ANALYZE`);
+  } catch (err) {
+    console.error(`[db] ANALYZE falhou: ${err?.message || err}`);
+  }
+  try {
+    db.exec(`VACUUM`);
+    console.log(`[db] migracao concluida em ${((Date.now() - inicio) / 1000).toFixed(1)}s`);
+  } catch (err) {
+    console.error(
+      `[db] VACUUM falhou: ${err?.message || err}. ` +
+        'O banco segue valido e o servidor sobe normalmente; o espaco dos indices ' +
+        'antigos fica reservado dentro do arquivo. VACUUM precisa de espaco livre ' +
+        'em disco de cerca de 2x o tamanho do banco: libere espaco e rode ' +
+        '"sqlite3 monitor.db VACUUM;" com o servidor parado pra recuperar.'
+    );
+  }
+}
+
 export function getDb() {
   if (db) return db;
 
@@ -78,15 +153,6 @@ export function getDb() {
       down_bps INTEGER,
       up_bps INTEGER
     );
-    -- Indices de COBERTURA: incluem down_bps/up_bps, as colunas que as agregacoes
-    -- leem. Sem elas no indice, uma media de 24h achava as linhas pelo indice e
-    -- depois buscava cada uma das ~440 mil na tabela, uma por uma. Com cobertura
-    -- a consulta se resolve dentro do indice: topConsumers caiu de 128ms pra 3ms,
-    -- queueUsage de 132ms pra 4ms, anomalias de 335ms pra 88ms.
-    -- Os dois cobrem casos diferentes: por data (janela recente de todos os
-    -- clientes) e por cliente (agrupar por cliente, e a ficha de um cliente so).
-    CREATE INDEX IF NOT EXISTS idx_bw_cobertura ON bandwidth_samples(created_at, client_name, down_bps, up_bps);
-    CREATE INDEX IF NOT EXISTS idx_bw_cobertura_cliente ON bandwidth_samples(client_name, created_at, down_bps, up_bps);
 
     CREATE TABLE IF NOT EXISTS log_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,30 +197,7 @@ export function getDb() {
     );
   `);
 
-  // Os indices antigos de bandwidth_samples viraram prefixo dos de cobertura
-  // criados acima, entao nao servem mais pra nada e so ocupam disco.
-  const tinhaIndiceAntigo = db
-    .prepare(
-      `SELECT 1 FROM sqlite_master WHERE type = 'index'
-        AND name IN ('idx_bw_samples_client_time', 'idx_bw_samples_time')`
-    )
-    .get();
-  db.exec(`DROP INDEX IF EXISTS idx_bw_samples_client_time`);
-  db.exec(`DROP INDEX IF EXISTS idx_bw_samples_time`);
-
-  if (tinhaIndiceAntigo) {
-    // So na primeira subida depois da migracao. Sem VACUUM as paginas dos
-    // indices derrubados ficam como espaco livre dentro do arquivo: o banco
-    // passaria de 162 MB pra 239 MB. Com VACUUM fecha em 146 MB, menor do que
-    // era antes. Custa ~9s e uma trava exclusiva, aceitavel porque o servidor
-    // esta subindo, e nao repete nas subidas seguintes.
-    // ANALYZE junto, pra o planejador ter estatistica dos indices novos.
-    console.log('[db] migrando indices de banda (VACUUM + ANALYZE, pode levar alguns segundos)...');
-    const inicio = Date.now();
-    db.exec(`ANALYZE`);
-    db.exec(`VACUUM`);
-    console.log(`[db] migracao concluida em ${((Date.now() - inicio) / 1000).toFixed(1)}s`);
-  }
+  migrarIndicesDeBanda(db);
 
   const hasProfile = db
     .prepare(`SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'profile'`)
