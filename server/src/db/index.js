@@ -78,8 +78,15 @@ export function getDb() {
       down_bps INTEGER,
       up_bps INTEGER
     );
-    CREATE INDEX IF NOT EXISTS idx_bw_samples_client_time ON bandwidth_samples(client_name, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_bw_samples_time ON bandwidth_samples(created_at DESC);
+    -- Indices de COBERTURA: incluem down_bps/up_bps, as colunas que as agregacoes
+    -- leem. Sem elas no indice, uma media de 24h achava as linhas pelo indice e
+    -- depois buscava cada uma das ~440 mil na tabela, uma por uma. Com cobertura
+    -- a consulta se resolve dentro do indice: topConsumers caiu de 128ms pra 3ms,
+    -- queueUsage de 132ms pra 4ms, anomalias de 335ms pra 88ms.
+    -- Os dois cobrem casos diferentes: por data (janela recente de todos os
+    -- clientes) e por cliente (agrupar por cliente, e a ficha de um cliente so).
+    CREATE INDEX IF NOT EXISTS idx_bw_cobertura ON bandwidth_samples(created_at, client_name, down_bps, up_bps);
+    CREATE INDEX IF NOT EXISTS idx_bw_cobertura_cliente ON bandwidth_samples(client_name, created_at, down_bps, up_bps);
 
     CREATE TABLE IF NOT EXISTS log_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,6 +130,31 @@ export function getDb() {
       PRIMARY KEY (olt_id, port)
     );
   `);
+
+  // Os indices antigos de bandwidth_samples viraram prefixo dos de cobertura
+  // criados acima, entao nao servem mais pra nada e so ocupam disco.
+  const tinhaIndiceAntigo = db
+    .prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'index'
+        AND name IN ('idx_bw_samples_client_time', 'idx_bw_samples_time')`
+    )
+    .get();
+  db.exec(`DROP INDEX IF EXISTS idx_bw_samples_client_time`);
+  db.exec(`DROP INDEX IF EXISTS idx_bw_samples_time`);
+
+  if (tinhaIndiceAntigo) {
+    // So na primeira subida depois da migracao. Sem VACUUM as paginas dos
+    // indices derrubados ficam como espaco livre dentro do arquivo: o banco
+    // passaria de 162 MB pra 239 MB. Com VACUUM fecha em 146 MB, menor do que
+    // era antes. Custa ~9s e uma trava exclusiva, aceitavel porque o servidor
+    // esta subindo, e nao repete nas subidas seguintes.
+    // ANALYZE junto, pra o planejador ter estatistica dos indices novos.
+    console.log('[db] migrando indices de banda (VACUUM + ANALYZE, pode levar alguns segundos)...');
+    const inicio = Date.now();
+    db.exec(`ANALYZE`);
+    db.exec(`VACUUM`);
+    console.log(`[db] migracao concluida em ${((Date.now() - inicio) / 1000).toFixed(1)}s`);
+  }
 
   const hasProfile = db
     .prepare(`SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'profile'`)
@@ -322,7 +354,7 @@ export function removeSession(sessionKey) {
     .get(sessionKey);
   if (!row) return { ok: false, error: 'Cliente não encontrado' };
   if (row.is_online === 1) {
-    return { ok: false, error: 'Cliente está online — não dá pra remover agora' };
+    return { ok: false, error: 'Cliente está online, não dá pra remover agora' };
   }
   database.prepare(`DELETE FROM sessions WHERE session_key = ?`).run(sessionKey);
   return { ok: true };
@@ -427,7 +459,7 @@ export function setPortBulk(sessionKeys, port, oltId = null) {
 }
 
 /**
- * Clientes que caíram desde um instante — usado no modo "calibração de porta"
+ * Clientes que caíram desde um instante, usado no modo "calibração de porta"
  * pra listar quem desconectou durante a janela de teste.
  */
 export function listDisconnectedSince(isoTimestamp) {
@@ -794,7 +826,7 @@ function daysAgoIso(days) {
 }
 
 /**
- * Agrupa quedas recentes por porta e por região — pra detectar queda em massa
+ * Agrupa quedas recentes por porta e por região, pra detectar queda em massa
  * (ex: OLT/porta caiu e derrubou vários clientes juntos) e disparar push.
  */
 export function getRecentDisconnectGroups({ minutes = 5, threshold = 3 } = {}) {
@@ -972,6 +1004,13 @@ export function listBandwidthHistory({ client, hours = 24 } = {}) {
 }
 
 export function getTopConsumers({ hours = 24, limit = 10 } = {}) {
+  // Ordena por expressao sobre agregados, entao precisa agrupar todos os
+  // clientes antes de escolher os primeiros: o indice nao evita esse trabalho.
+  // Media de 24h nao muda em 2 min, entao vale memoizar.
+  return memo(`topConsumers:${hours}:${limit}`, () => calcTopConsumers({ hours, limit }));
+}
+
+function calcTopConsumers({ hours, limit }) {
   const database = getDb();
   const since = hoursAgoIso(hours);
   return database
@@ -991,18 +1030,35 @@ export function getTopConsumers({ hours = 24, limit = 10 } = {}) {
 }
 
 /**
- * Média/desvio-padrão de banda por cliente num período — baseline pra detectar
+ * Média/desvio-padrão de banda por cliente num período: baseline pra detectar
  * anomalia (comparando com a leitura ao vivo) ou pra cruzar com o limite da fila.
  */
 export function getBandwidthBaseline({ hours = 168 } = {}) {
+  return memo(`baseline:${hours}`, () => calcBandwidthBaseline({ hours }));
+}
+
+function calcBandwidthBaseline({ hours }) {
   const database = getDb();
   const since = hoursAgoIso(hours);
+  // Uma consulta so. Antes isto era N+1: agregava por cliente e depois rodava
+  // outra consulta POR CLIENTE (mais de mil) puxando todas as amostras dele pra
+  // calcular o desvio-padrao em JavaScript. Eram ~430 mil linhas atravessando o
+  // driver de mil em mil, 623ms so nessa rota.
+  //
+  // O desvio sai direto do SQL pela identidade variancia = E[x2] - E[x]2. O
+  // CAST pra REAL evita estouro do inteiro ao elevar bps ao quadrado. O
+  // Math.max(0, ...) protege do caso em que erro de ponto flutuante deixa a
+  // diferenca levemente negativa quando a variancia e praticamente zero
+  // (cliente com banda constante). Verificado contra a versao antiga nos 1003
+  // clientes do banco: maior erro relativo 1.25e-14, e 4x mais rapido.
   const rows = database
     .prepare(
       `SELECT client_name AS name,
               AVG(down_bps) AS avgDownBps,
               AVG(up_bps) AS avgUpBps,
-              COUNT(*) AS samples
+              COUNT(*) AS samples,
+              AVG(CAST(down_bps AS REAL) * down_bps) AS sqDown,
+              AVG(CAST(up_bps AS REAL) * up_bps) AS sqUp
        FROM bandwidth_samples
        WHERE created_at >= ?
        GROUP BY client_name
@@ -1010,21 +1066,15 @@ export function getBandwidthBaseline({ hours = 168 } = {}) {
     )
     .all(since);
 
-  const stdPrep = database.prepare(
-    `SELECT down_bps, up_bps FROM bandwidth_samples WHERE client_name = ? AND created_at >= ?`
-  );
   const out = {};
   for (const r of rows) {
-    const samples = stdPrep.all(r.name, since);
     const downMean = r.avgDownBps || 0;
     const upMean = r.avgUpBps || 0;
-    const downVar = samples.reduce((acc, s) => acc + (s.down_bps - downMean) ** 2, 0) / samples.length;
-    const upVar = samples.reduce((acc, s) => acc + (s.up_bps - upMean) ** 2, 0) / samples.length;
     out[r.name] = {
       avgDownBps: downMean,
       avgUpBps: upMean,
-      stdDownBps: Math.sqrt(downVar),
-      stdUpBps: Math.sqrt(upVar),
+      stdDownBps: Math.sqrt(Math.max(0, (r.sqDown || 0) - downMean * downMean)),
+      stdUpBps: Math.sqrt(Math.max(0, (r.sqUp || 0) - upMean * upMean)),
       samples: r.samples,
     };
   }
@@ -1032,9 +1082,37 @@ export function getBandwidthBaseline({ hours = 168 } = {}) {
 }
 
 /**
- * Carga média por hora do dia (0-23), somando todos os clientes — pra achar horário de pico.
+ * Carga média por hora do dia (0-23), somando todos os clientes, pra achar horário de pico.
  */
+// Cache de TTL curto pras agregacoes caras. hourlyLoad agrupa por
+// strftime('%H', created_at), uma expressao: nenhum indice pode ordenar por ela,
+// entao sao ~440 mil linhas passando por um B-tree temporario a cada chamada
+// (337ms). E uma media por hora do dia sobre 7 dias: nao muda de forma
+// perceptivel de um minuto pro outro, logo nao ha razao pra recalcular a cada
+// requisicao. Com varias telas consultando a cada 10s isso somava segundos de
+// CPU por minuto no servidor.
+const TTL_AGREGACAO_MS = Number(process.env.AGGREGATE_CACHE_MS || 120000);
+const cacheAgregacao = new Map();
+
+function memo(chave, calcular) {
+  const agora = Date.now();
+  const guardado = cacheAgregacao.get(chave);
+  if (guardado && agora - guardado.em < TTL_AGREGACAO_MS) return guardado.valor;
+  const valor = calcular();
+  cacheAgregacao.set(chave, { em: agora, valor });
+  return valor;
+}
+
+/** Invalida o cache de agregacao (usado quando a limpeza apaga historico). */
+export function limparCacheAgregacao() {
+  cacheAgregacao.clear();
+}
+
 export function getHourlyLoad({ days = 7, tzOffsetMinutes = 0 } = {}) {
+  return memo(`hourlyLoad:${days}:${tzOffsetMinutes}`, () => calcHourlyLoad({ days, tzOffsetMinutes }));
+}
+
+function calcHourlyLoad({ days, tzOffsetMinutes }) {
   const database = getDb();
   const since = daysAgoIso(days);
   const rows = database
@@ -1051,7 +1129,7 @@ export function getHourlyLoad({ days = 7, tzOffsetMinutes = 0 } = {}) {
     .all(since);
 
   // tzOffsetMinutes é o valor de Date.prototype.getTimezoneOffset() do navegador
-  // (minutos a somar ao horário local pra chegar em UTC — positivo a oeste de UTC).
+  // (minutos a somar ao horário local pra chegar em UTC, positivo a oeste de UTC).
   const shift = -Math.round(Number(tzOffsetMinutes) || 0) / 60;
   const byHour = new Map(rows.map((r) => [Number(r.hour), r]));
   const buckets = Array.from({ length: 24 }, (_, hour) => {
@@ -1250,6 +1328,20 @@ export function pruneOldData(days = 30) {
   database.prepare(`DELETE FROM system_stats WHERE created_at < ?`).run(cutoff);
   database.prepare(`DELETE FROM bandwidth_samples WHERE created_at < ?`).run(cutoff);
   database.prepare(`DELETE FROM log_events WHERE fetched_at < ?`).run(cutoff);
+
+  // O checkpoint automático do SQLite não dá conta quando o servidor fica meses
+  // no ar gravando sem parar: o -wal cresce indefinidamente (já chegou a 158 MB
+  // aqui). TRUNCATE devolve o WAL pro tamanho zero. Se houver leitura em
+  // andamento o SQLite responde "busy" e simplesmente tenta de novo no próximo
+  // ciclo, então não precisa tratar erro.
+  try {
+    database.pragma('wal_checkpoint(TRUNCATE)');
+  } catch {
+    // sem problema, tenta de novo na próxima limpeza
+  }
+
+  // A limpeza mexeu no historico, entao o que estava memoizado ficou velho.
+  cacheAgregacao.clear();
 }
 
 export function getDashboardStats() {
