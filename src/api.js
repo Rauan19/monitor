@@ -12,9 +12,6 @@ async function request(path, options = {}) {
   const res = await fetch(`${base}${path}`, {
     ...options,
     headers: {
-      // mantido porque o endereço do servidor é configurável no app: se apontarem
-      // pra um túnel ngrok em teste local, sem isso vem HTML de aviso em vez de JSON
-      'ngrok-skip-browser-warning': 'true',
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
@@ -45,7 +42,7 @@ function withPage(params, page, pageSize) {
 
 export const api = {
   testConnection: async (baseUrl) => {
-    const res = await fetch(`${baseUrl}/api/health`, { headers: { 'ngrok-skip-browser-warning': 'true' } });
+    const res = await fetch(`${baseUrl}/api/health`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   },

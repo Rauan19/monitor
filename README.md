@@ -44,7 +44,6 @@ Tem **dois** lugares onde o endereço vive:
 
 > **Atenção:** o EAS Build só envia arquivos rastreados pelo git. Trocar a constante sem commitar faz o build sair com o endereço antigo.
 
-Toda requisição manda o header `ngrok-skip-browser-warning` (em `src/api.js`). Não é mais necessário com o domínio fixo, mas fica mantido porque o endereço é configurável: se você apontar o app pra um túnel ngrok em teste local, sem esse header o ngrok devolve uma página HTML de aviso em vez do JSON e o app quebra.
 
 ## Ícone e splash screen
 
