@@ -45,7 +45,7 @@ async function tick() {
 
 export function startSystemPoller() {
   if (timer) return;
-  console.log(`[system-poller] iniciando — a cada ${config.systemPollIntervalMs}ms`);
+  console.log(`[system-poller] iniciando, a cada ${config.systemPollIntervalMs}ms`);
   tick();
   timer = setInterval(tick, config.systemPollIntervalMs);
 }

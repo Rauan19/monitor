@@ -41,7 +41,7 @@ function encodeSentence(words) {
 }
 
 /**
- * Cliente RouterOS API — somente leitura (print).
+ * Cliente RouterOS API, somente leitura (print).
  */
 export class MikroTikClient {
   constructor() {
@@ -471,7 +471,7 @@ export class MikroTikClient {
   }
 
   /**
-   * Somente leitura: buffer de log do RouterOS (é circular — por isso persistimos no SQLite).
+   * Somente leitura: buffer de log do RouterOS (é circular, por isso persistimos no SQLite).
    */
   async getLogs(limit = 200) {
     try {

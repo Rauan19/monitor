@@ -41,7 +41,7 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Dados (/api/*) sempre buscam na rede — nunca serve informação velha do cache.
+// Dados (/api/*) sempre buscam na rede, nunca serve informação velha do cache.
 // Só o "casco" do app (HTML/JS/CSS) usa cache, pra abrir mesmo sem internet.
 self.addEventListener('fetch', (event) => {
   const { request } = event;

@@ -95,7 +95,7 @@ authRouter.post('/login', (req, res) => {
 
   const token = createSessionToken(config.auth.user);
   setSessionCookie(res, token);
-  // O token também volta no corpo pro app mobile, que não guarda cookies HttpOnly —
+  // O token também volta no corpo pro app mobile, que não guarda cookies HttpOnly.
   // ele manda de volta via header "Authorization: Bearer <token>".
   res.json({ ok: true, user: config.auth.user, token });
 });

@@ -23,8 +23,8 @@ function getAuth() {
 }
 
 /**
- * Manda push pra um token de navegador (web push) via FCM v1 direto —
- * o app mobile usa a API do Expo (push.js), a web fala direto com o FCM.
+ * Manda push pra um token de navegador (web push) via FCM v1 direto.
+ * O app mobile usa a API do Expo (push.js), a web fala direto com o FCM.
  */
 export async function sendFcmWebPush(token, { title, body, data }) {
   const googleAuth = getAuth();

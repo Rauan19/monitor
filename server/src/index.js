@@ -17,7 +17,7 @@ getDb();
 
 if (!config.auth.password || !config.auth.secret) {
   console.warn(
-    '[auth] AUTH_PASSWORD e/ou AUTH_SECRET não definidos no .env — login ficará bloqueado até configurar.'
+    '[auth] AUTH_PASSWORD e/ou AUTH_SECRET não definidos no .env. Login ficará bloqueado até configurar.'
   );
 }
 
