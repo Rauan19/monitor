@@ -123,23 +123,16 @@ export default function HomeScreen() {
   const [error, setError] = useState('');
   const [staleAt, setStaleAt] = useState(null);
 
-  const load = useCallback(async () => {
+  // Os numeros ao vivo (online, quedas, status do CCR) sao consultas de indice,
+  // custam ~0ms e valem a pena a cada 10s.
+  const loadRapido = useCallback(async () => {
     try {
-      const { data, stale, savedAt } = await withCache('home', async () => {
-        const tz = new Date().getTimezoneOffset();
-        const [dash, status, sys, hist, hourly, top, notifs] = await Promise.all([
-          api.dashboard(),
-          api.status(),
-          api.system(),
-          api.systemHistory(24),
-          api.hourlyLoad(7, tz),
-          api.topConsumers(24, 5),
-          api.notifications({ page: 1, pageSize: 3 }),
-        ]);
-        return { dash, status, sys, hist, hourly, top, notifs };
+      const { data, stale, savedAt } = await withCache('home:rapido', async () => {
+        const [dash, status] = await Promise.all([api.dashboard(), api.status()]);
+        return { dash, status };
       });
       setStaleAt(stale ? savedAt : null);
-      setDados(data);
+      setDados((atual) => ({ ...atual, ...data }));
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar o painel');
@@ -148,18 +141,46 @@ export default function HomeScreen() {
     }
   }, []);
 
+  // O resto e agregacao sobre centenas de milhares de amostras de banda. Uma
+  // media por hora do dia sobre 7 dias nao muda em 10 segundos: recalcular
+  // nesse ritmo so gastava CPU do servidor. O TTL do cache do servidor e de
+  // 2 min, entao pedir a cada 2 min casa com ele.
+  const loadPesado = useCallback(async () => {
+    try {
+      const { data } = await withCache('home:pesado', async () => {
+        const tz = new Date().getTimezoneOffset();
+        const [sys, hist, hourly, top, notifs] = await Promise.all([
+          api.system(),
+          api.systemHistory(24),
+          api.hourlyLoad(7, tz),
+          api.topConsumers(24, 5),
+          api.notifications({ page: 1, pageSize: 3 }),
+        ]);
+        return { sys, hist, hourly, top, notifs };
+      });
+      setDados((atual) => ({ ...atual, ...data }));
+    } catch {
+      // os numeros ao vivo continuam valendo; nao derruba a tela por isso
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       let ativo = true;
-      load();
-      const id = setInterval(() => {
-        if (ativo) load();
+      loadRapido();
+      loadPesado();
+      const rapido = setInterval(() => {
+        if (ativo) loadRapido();
       }, 10000);
+      const pesado = setInterval(() => {
+        if (ativo) loadPesado();
+      }, 120000);
       return () => {
         ativo = false;
-        clearInterval(id);
+        clearInterval(rapido);
+        clearInterval(pesado);
       };
-    }, [load])
+    }, [loadRapido, loadPesado])
   );
 
   if (loading && !dados) {
