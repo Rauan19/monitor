@@ -1,4 +1,11 @@
-import { getServerUrl, getToken } from './storage';
+import { getServerUrl, getToken, setToken } from './storage';
+
+// Quem avisar quando o servidor disser que a sessao nao vale mais. O
+// AuthContext registra aqui pra levar de volta pro login.
+let aoSessaoInvalida = null;
+export function onSessaoInvalida(fn) {
+  aoSessaoInvalida = fn;
+}
 
 async function request(path, options = {}) {
   const base = await getServerUrl();
@@ -18,7 +25,20 @@ async function request(path, options = {}) {
     },
   });
 
+  // Renovacao deslizante: o servidor manda um token novo quando o atual passou
+  // da metade da validade. Guardar aqui, em toda resposta, e o que faz quem usa
+  // o app nunca ser deslogado.
+  const renovado = res.headers?.get?.('X-Session-Token');
+  if (renovado) {
+    await setToken(renovado);
+  }
+
   if (!res.ok) {
+    // 401 fora do login = token expirado ou invalido. So esse caso tira o
+    // usuario da sessao; queda de rede e 5xx nao.
+    if (res.status === 401 && path !== '/api/login' && aoSessaoInvalida) {
+      aoSessaoInvalida();
+    }
     let message = `HTTP ${res.status}`;
     try {
       const body = await res.json();
@@ -46,8 +66,9 @@ export const api = {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   },
+  // client: 'app' pede a sessao longa (30 dias) em vez da do painel (12h).
   login: (username, password) =>
-    request('/api/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+    request('/api/login', { method: 'POST', body: JSON.stringify({ username, password, client: 'app' }) }),
   logout: () => request('/api/logout', { method: 'POST' }),
   me: () => request('/api/me'),
   dashboard: () => request('/api/dashboard'),

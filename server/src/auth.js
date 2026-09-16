@@ -46,13 +46,18 @@ function parseCookies(req) {
   );
 }
 
-function createSessionToken(username) {
-  const maxAgeMs = config.auth.sessionHours * 60 * 60 * 1000;
-  return sign({ u: username, exp: Date.now() + maxAgeMs });
+const WEB_SESSION_MS = () => config.auth.sessionHours * 60 * 60 * 1000;
+const APP_SESSION_MS = () => config.auth.appSessionDays * 24 * 60 * 60 * 1000;
+
+// "d" guarda a duracao original da sessao dentro do token, pra renovacao saber
+// se renova por 12h (painel) ou 30 dias (app). Tokens antigos, emitidos antes
+// desse campo existir, caem no padrao do painel.
+function createSessionToken(username, durationMs = WEB_SESSION_MS()) {
+  return sign({ u: username, exp: Date.now() + durationMs, d: durationMs });
 }
 
 function setSessionCookie(res, token) {
-  const maxAgeMs = config.auth.sessionHours * 60 * 60 * 1000;
+  const maxAgeMs = WEB_SESSION_MS();
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
@@ -73,12 +78,32 @@ function bearerToken(req) {
 export function requireAuth(req, res, next) {
   // ?token= existe só pra abrir o relatório imprimível no navegador externo do celular
   // (o app mobile não tem cookie de sessão, só o Bearer token).
-  const token = bearerToken(req) || parseCookies(req)[COOKIE_NAME] || req.query.token;
+  const viaBearer = bearerToken(req);
+  const viaCookie = parseCookies(req)[COOKIE_NAME];
+  const token = viaBearer || viaCookie || req.query.token;
   const payload = verify(token);
   if (!payload) {
     return res.status(401).json({ error: 'unauthorized' });
   }
   req.user = payload.u;
+
+  // Renovacao deslizante. Antes o token expirava num horario fixo contado do
+  // login, usasse o app ou nao: logou de manha, caia a noite no meio do uso.
+  // Agora, passada metade da validade, qualquer requisicao autenticada devolve
+  // um token novo com a validade cheia. Quem usa nao expira; so expira quem
+  // ficou parado o periodo inteiro.
+  const duracao = Number(payload.d) || WEB_SESSION_MS();
+  const restante = payload.exp - Date.now();
+  if (restante < duracao / 2) {
+    const novo = createSessionToken(payload.u, duracao);
+    if (viaBearer) {
+      // O app le esse header em toda resposta e troca o token guardado.
+      res.setHeader('X-Session-Token', novo);
+      res.setHeader('Access-Control-Expose-Headers', 'X-Session-Token');
+    } else if (viaCookie) {
+      setSessionCookie(res, novo);
+    }
+  }
   next();
 }
 
@@ -93,8 +118,11 @@ authRouter.post('/login', (req, res) => {
     return res.status(401).json({ error: 'Usuário ou senha inválidos' });
   }
 
-  const token = createSessionToken(config.auth.user);
-  setSessionCookie(res, token);
+  // O app pede sessao longa mandando client: 'app'. O painel continua com a
+  // sessao curta do cookie.
+  const ehApp = req.body?.client === 'app';
+  const token = createSessionToken(config.auth.user, ehApp ? APP_SESSION_MS() : WEB_SESSION_MS());
+  if (!ehApp) setSessionCookie(res, token);
   // O token também volta no corpo pro app mobile, que não guarda cookies HttpOnly.
   // ele manda de volta via header "Authorization: Bearer <token>".
   res.json({ ok: true, user: config.auth.user, token });

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { api } from '../api';
+import { api, onSessaoInvalida } from '../api';
 import { unregisterPushNotifications } from '../notifications';
 import { clearSession, getServerUrl, getToken, getUsername, setServerUrl as saveServerUrl, setToken, setUsername } from '../storage';
 
@@ -20,12 +20,31 @@ export function AuthProvider({ children }) {
         try {
           await api.me();
           setUser(username);
-        } catch {
-          await clearSession();
+        } catch (err) {
+          // Este era o motivo de deslogar "do nada". Qualquer erro aqui apagava
+          // a sessao: abrir o app com sinal fraco, com timeout, ou com o
+          // servidor devolvendo 502 jogava fora um token perfeitamente valido.
+          // So 401 significa sessao invalida. Nos outros casos o usuario entra
+          // normalmente e as telas mostram o cache offline com o aviso.
+          if (err?.status === 401) {
+            await clearSession();
+          } else {
+            setUser(username);
+          }
         }
       }
       setChecking(false);
     })();
+  }, []);
+
+  // Token expirou durante o uso (401 em qualquer tela): volta pro login em vez
+  // de deixar o usuario olhando telas que so dao erro.
+  useEffect(() => {
+    onSessaoInvalida(async () => {
+      await clearSession();
+      setUser(null);
+    });
+    return () => onSessaoInvalida(null);
   }, []);
 
   const updateServerUrl = useCallback(async (url) => {
