@@ -4,6 +4,29 @@ import { config } from './config.js';
 
 const COOKIE_NAME = 'mksess';
 
+// Tamanho minimo do segredo. O token e HMAC-SHA256: com segredo curto, qualquer
+// token que vaze (print, log de proxy) permite testar segredos offline ate achar
+// e forjar sessao. 32 caracteres cobre o gerado por randomBytes(16).toString('hex')
+// e barra valores como "admin" ou "123456".
+const MIN_SECRET_LEN = 32;
+
+/**
+ * Autenticacao so funciona com senha E segredo forte configurados. Antes, com
+ * os dois vazios, o servidor avisava "login ficara bloqueado" mas fazia o
+ * contrario: senha vazia entrava (safeEqual('', '') e true) e qualquer pessoa
+ * forjava token assinando com chave vazia. Como a API fica exposta na
+ * internet com dados de clientes, falhar ABERTO nesse caso e inaceitavel.
+ */
+export function authConfigurada() {
+  return Boolean(config.auth.password) && String(config.auth.secret || '').length >= MIN_SECRET_LEN;
+}
+
+function recusarSemConfig(res) {
+  return res.status(503).json({
+    error: 'Autenticação não configurada no servidor: defina AUTH_PASSWORD e AUTH_SECRET (mínimo 32 caracteres) no .env',
+  });
+}
+
 function safeEqual(a, b) {
   const bufA = Buffer.from(String(a));
   const bufB = Buffer.from(String(b));
@@ -76,6 +99,7 @@ function bearerToken(req) {
 }
 
 export function requireAuth(req, res, next) {
+  if (!authConfigurada()) return recusarSemConfig(res);
   // ?token= existe só pra abrir o relatório imprimível no navegador externo do celular
   // (o app mobile não tem cookie de sessão, só o Bearer token).
   const viaBearer = bearerToken(req);
@@ -110,6 +134,7 @@ export function requireAuth(req, res, next) {
 export const authRouter = Router();
 
 authRouter.post('/login', (req, res) => {
+  if (!authConfigurada()) return recusarSemConfig(res);
   const { username, password } = req.body || {};
   const validUser = safeEqual(username || '', config.auth.user);
   const validPassword = safeEqual(password || '', config.auth.password);

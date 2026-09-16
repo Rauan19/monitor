@@ -8,16 +8,20 @@ import { startPoller, stopPoller } from './poller/index.js';
 import { startSystemPoller, stopSystemPoller } from './poller/system.js';
 import { apiRouter } from './routes/api.js';
 import { mikrotik } from './mikrotik/client.js';
-import { authRouter, requireAuth } from './auth.js';
+import { authConfigurada, authRouter, requireAuth } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 getDb();
 
-if (!config.auth.password || !config.auth.secret) {
-  console.warn(
-    '[auth] AUTH_PASSWORD e/ou AUTH_SECRET não definidos no .env. Login ficará bloqueado até configurar.'
+if (!authConfigurada()) {
+  // O monitor continua coletando e mandando alerta; so a API e o painel ficam
+  // trancados ate configurar. Derrubar o processo tiraria os alertas do ar.
+  console.error(
+    '[auth] AUTH_PASSWORD vazio ou AUTH_SECRET vazio/curto (mínimo 32 caracteres). ' +
+      'A API e o painel vão recusar todo acesso até configurar. Gere o segredo com: ' +
+      'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"'
   );
 }
 
