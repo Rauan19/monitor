@@ -51,6 +51,8 @@ export class MikroTikClient {
     this.connecting = null;
     this.pending = [];
     this.tagSeq = 1;
+    this._cache = new Map(); // chave -> { em, valor }
+    this._emAndamento = new Map(); // chave -> Promise
   }
 
   async connect() {
@@ -134,6 +136,10 @@ export class MikroTikClient {
 
   _cleanupSocket() {
     this.connected = false;
+    // Conexao caiu: o que estava em cache virou retrato de antes da queda.
+    // Manter serviria dado velho justamente na hora em que o operador precisa
+    // saber o que esta acontecendo agora.
+    this._limparCache();
     if (this.socket) {
       try {
         this.socket.removeAllListeners();
@@ -315,6 +321,51 @@ export class MikroTikClient {
   }
 
   /**
+   * Cache curto + deduplicacao das leituras ao vivo do CCR.
+   *
+   * O problema: cada tela de cada aparelho disparava uma consulta propria. A
+   * tela Sistema recarrega a cada 15s e pede interfaces (583ms), filas (737ms),
+   * leases e wireless de uma vez: ~1,4s de trabalho no roteador por aparelho,
+   * por ciclo. Com dois celulares abertos isso dobra, e o CCR ja esta ocupado
+   * atendendo mais de mil sessoes PPPoE.
+   *
+   * Duas defesas:
+   *
+   * 1. TTL curto: uma resposta recente serve todo mundo. Lista de filas e de
+   *    interfaces nao muda de segundo em segundo.
+   * 2. Deduplicacao: se a mesma leitura ja esta em andamento, os pedidos que
+   *    chegam esperam A MESMA promessa em vez de abrir outra consulta. Sem
+   *    isso, dois aparelhos pedindo junto viram duas consultas mesmo com TTL,
+   *    porque nenhuma delas terminou pra popular o cache ainda.
+   */
+  async _comCache(chave, ttlMs, fn) {
+    const agora = Date.now();
+    const guardado = this._cache.get(chave);
+    if (guardado && agora - guardado.em < ttlMs) return guardado.valor;
+
+    const emAndamento = this._emAndamento.get(chave);
+    if (emAndamento) return emAndamento;
+
+    const promessa = (async () => {
+      try {
+        const valor = await fn();
+        this._cache.set(chave, { em: Date.now(), valor });
+        return valor;
+      } finally {
+        this._emAndamento.delete(chave);
+      }
+    })();
+
+    this._emAndamento.set(chave, promessa);
+    return promessa;
+  }
+
+  /** Descarta o cache (usado quando a conexao com o CCR cai). */
+  _limparCache() {
+    this._cache.clear();
+  }
+
+  /**
    * Helper genérico de leitura: roda um /print e devolve as linhas como objetos.
    */
   async _printRows(path, proplist, extraArgs = []) {
@@ -344,6 +395,10 @@ export class MikroTikClient {
    * Somente leitura: CPU, memória, uptime, versão do CCR.
    */
   async getSystemResource() {
+    return this._comCache('getSystemResource', 5000, () => this._getSystemResource());
+  }
+
+  async _getSystemResource() {
     const rows = await this._printRows('/system/resource', null);
     const r = rows[0] || {};
     return {
@@ -363,6 +418,10 @@ export class MikroTikClient {
    * Somente leitura: voltagem/temperatura (RouterOS 6 devolve uma linha, RouterOS 7 uma por sensor).
    */
   async getSystemHealth() {
+    return this._comCache('getSystemHealth', 5000, () => this._getSystemHealth());
+  }
+
+  async _getSystemHealth() {
     try {
       const rows = await this._printRows('/system/health', null);
       if (rows.length && rows[0].name !== undefined && rows[0].value !== undefined) {
@@ -380,6 +439,10 @@ export class MikroTikClient {
    * Somente leitura: estado e contadores de erro/drop de todas as interfaces.
    */
   async getInterfaces() {
+    return this._comCache('getInterfaces', 5000, () => this._getInterfaces());
+  }
+
+  async _getInterfaces() {
     try {
       const rows = await this._printRows(
         '/interface',
@@ -407,6 +470,10 @@ export class MikroTikClient {
    * Somente leitura: leases DHCP ativos (se o CCR também servir DHCP).
    */
   async getDhcpLeases() {
+    return this._comCache('getDhcpLeases', 15000, () => this._getDhcpLeases());
+  }
+
+  async _getDhcpLeases() {
     try {
       const rows = await this._printRows(
         '/ip/dhcp-server/lease',
@@ -429,6 +496,10 @@ export class MikroTikClient {
    * Somente leitura: filas simples (limite contratado vs. uso).
    */
   async getQueues() {
+    return this._comCache('getQueues', 30000, () => this._getQueues());
+  }
+
+  async _getQueues() {
     try {
       const rows = await this._printRows(
         '/queue/simple',
@@ -452,6 +523,10 @@ export class MikroTikClient {
    * Somente leitura: clientes wireless registrados (sinal/CCQ), se houver rádio.
    */
   async getWirelessRegistrations() {
+    return this._comCache('getWirelessRegistrations', 15000, () => this._getWirelessRegistrations());
+  }
+
+  async _getWirelessRegistrations() {
     try {
       const rows = await this._printRows(
         '/interface/wireless/registration-table',

@@ -35,10 +35,5 @@ export const config = {
     password: process.env.AUTH_PASSWORD || '',
     secret: process.env.AUTH_SECRET || '',
     sessionHours: Number(process.env.AUTH_SESSION_HOURS || 12),
-    // Sessao do app mobile. Maior que a do painel porque o celular fica com o
-    // tecnico o dia todo e o app existe pra receber alerta: pedir login toda
-    // vez que ele abre atrapalha justamente na hora da queda. Com a renovacao
-    // automatica, quem usa o app nunca chega a expirar.
-    appSessionDays: Number(process.env.AUTH_APP_SESSION_DAYS || 30),
   },
 };

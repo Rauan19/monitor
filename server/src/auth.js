@@ -70,7 +70,13 @@ function parseCookies(req) {
 }
 
 const WEB_SESSION_MS = () => config.auth.sessionHours * 60 * 60 * 1000;
-const APP_SESSION_MS = () => config.auth.appSessionDays * 24 * 60 * 60 * 1000;
+// Sessao do app, fixa no codigo de proposito: nao e coisa pra ajustar por
+// ambiente, e deixar num .env so cria a chance de subir errado e o app comecar
+// a pedir senha toda hora. O celular fica com o tecnico o dia todo e o app
+// existe pra avisar de queda; com a renovacao automatica, quem usa nunca chega
+// nesse limite. Ele so vale pra quem ficou um ano inteiro sem abrir o app.
+const APP_SESSION_DIAS = 365;
+const APP_SESSION_MS = () => APP_SESSION_DIAS * 24 * 60 * 60 * 1000;
 
 // "d" guarda a duracao original da sessao dentro do token, pra renovacao saber
 // se renova por 12h (painel) ou 30 dias (app). Tokens antigos, emitidos antes
