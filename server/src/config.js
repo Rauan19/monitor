@@ -20,6 +20,13 @@ export const config = {
   outageAlert: {
     threshold: Number(process.env.OUTAGE_ALERT_THRESHOLD || 3),
     percentThreshold: Number(process.env.OUTAGE_ALERT_PERCENT || 0.5),
+    // Quantidade que dispara sozinha, sem passar pelo percentual. A regra de
+    // 50% protege porta pequena de alarme falso, mas sozinha cega o caso mais
+    // comum: numa porta com 100 clientes, 4 caindo juntos da 4% e nunca
+    // alertava. Medido no historico real, 3+ quedas na mesma janela de 5 min
+    // acontecem em 9% das janelas (1 cliente sozinho e 76%), entao 4 juntos na
+    // MESMA porta e sinal, nao ruido.
+    absoluteThreshold: Number(process.env.OUTAGE_ALERT_ABSOLUTE || 4),
     windowMinutes: Number(process.env.OUTAGE_ALERT_WINDOW_MINUTES || 5),
     cooldownMinutes: Number(process.env.OUTAGE_ALERT_COOLDOWN_MINUTES || 30),
   },

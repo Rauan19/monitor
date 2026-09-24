@@ -13,13 +13,21 @@ let wasConnected = null; // null = ainda não sabemos
 const outageCooldowns = new Map(); // "port:3" | "region:Centro" -> timestamp do último push
 
 function checkCorrelatedOutages() {
-  const { threshold, percentThreshold, windowMinutes, cooldownMinutes } = config.outageAlert;
+  const { threshold, percentThreshold, absoluteThreshold, windowMinutes, cooldownMinutes } =
+    config.outageAlert;
+
+  // Alerta quando o grupo bate o minimo E (representa boa parte da porta OU e
+  // um numero grande em termos absolutos). So o percentual deixava passar
+  // queda de 4 clientes numa porta grande; so o absoluto faria porta pequena
+  // alertar por qualquer coisa.
+  const deveAlertar = (grupo) =>
+    grupo.percent >= percentThreshold || grupo.count >= absoluteThreshold;
   const { byPort, byRegion } = getRecentDisconnectGroups({ minutes: windowMinutes, threshold });
   const now = Date.now();
   const cooldownMs = cooldownMinutes * 60 * 1000;
 
   for (const group of byPort) {
-    if (group.percent < percentThreshold) continue;
+    if (!deveAlertar(group)) continue;
     const key = `olt:${group.oltId || 0}:port:${group.port}`;
     const lastSent = outageCooldowns.get(key) || 0;
     if (now - lastSent < cooldownMs) continue;
@@ -48,7 +56,7 @@ function checkCorrelatedOutages() {
   }
 
   for (const group of byRegion) {
-    if (group.percent < percentThreshold) continue;
+    if (!deveAlertar(group)) continue;
     const key = `region:${group.region}`;
     const lastSent = outageCooldowns.get(key) || 0;
     if (now - lastSent < cooldownMs) continue;
