@@ -10,6 +10,12 @@ import { checkLinks } from './links.js';
 let timer = null;
 let running = false;
 let wasConnected = null; // null = ainda não sabemos
+
+// Quantos ciclos seguidos precisam falhar pra valer a pena derrubar e refazer a
+// conexao. Um erro isolado (comando lento, CCR ocupado) nao justifica: a
+// reconexao custa um login novo e nao conserta nada.
+const FALHAS_ATE_RECONECTAR = 3;
+let falhasSeguidas = 0;
 const outageCooldowns = new Map(); // "port:3" | "region:Centro" -> timestamp do último push
 
 function checkCorrelatedOutages() {
@@ -83,6 +89,7 @@ async function tick() {
 
   try {
     const clients = await mikrotik.getPppActive();
+    falhasSeguidas = 0;
     const result = upsertOnlineSessions(clients);
     updatePollStatus({
       connected: true,
@@ -162,10 +169,26 @@ async function tick() {
       }
     }
     wasConnected = false;
-    try {
-      await mikrotik.disconnect();
-    } catch {
-      // ignore
+
+    // Antes, QUALQUER erro derrubava a conexao. Um comando lento que estourava
+    // o timeout fazia o monitor deslogar e logar de novo no CCR a cada ciclo
+    // (o log do roteador registrava dezenas de "user monitor logged in/out via
+    // api"), e cada reconexao custa um login novo.
+    //
+    // Socket realmente morto ja se resolve sozinho: o evento 'close' limpa o
+    // estado e a proxima leitura reconecta. Entao aqui so forcamos a reconexao
+    // quando varios ciclos seguidos falham, que e o sinal de conexao
+    // meio-aberta: o servidor escreve, o CCR nunca responde, e sem isso ficaria
+    // preso nesse estado.
+    falhasSeguidas += 1;
+    if (falhasSeguidas >= FALHAS_ATE_RECONECTAR) {
+      console.error(`[poller] ${falhasSeguidas} falhas seguidas, reconectando no CCR`);
+      falhasSeguidas = 0;
+      try {
+        await mikrotik.disconnect();
+      } catch {
+        // ignore
+      }
     }
   } finally {
     running = false;

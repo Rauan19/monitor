@@ -85,6 +85,18 @@ export class MikroTikClient {
 
       socket.once('connect', async () => {
         socket.setTimeout(0);
+
+        // A conexao sai do servidor e atravessa a internet ate o CCR, passando
+        // por NAT no caminho. Sem keepalive, se ela morre em silencio (NAT
+        // esquecendo a sessao, reboot de equipamento no meio) o cliente so
+        // descobre quando um comando estoura o timeout de 15s: ate la, toda
+        // leitura fica pendurada. Com keepalive o proprio sistema derruba o
+        // socket morto e a reconexao acontece na hora.
+        socket.setKeepAlive(true, 30000);
+        // Comandos da API sao pequenos; esperar pra agrupar pacote so adiciona
+        // latencia em cada leitura.
+        socket.setNoDelay(true);
+
         this.socket = socket;
         this.buffer = Buffer.alloc(0);
         this.connected = true;
