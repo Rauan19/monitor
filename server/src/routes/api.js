@@ -30,6 +30,9 @@ import {
   listPushTokens,
   listSystemStats,
   addMonitoredLink,
+  contarHistorico,
+  escoposDeHistorico,
+  limparHistorico,
   getLinkStatus,
   listLinkEvents,
   listMonitoredLinks,
@@ -604,6 +607,29 @@ apiRouter.get('/report/monthly', (req, res) => {
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
+});
+
+// --- Limpeza de historico ---
+
+apiRouter.get('/history/stats', (req, res) => {
+  const days = Math.max(0, Number(req.query.days || 0));
+  res.json({ escopos: escoposDeHistorico(), itens: contarHistorico({ olderThanDays: days }) });
+});
+
+apiRouter.post('/history/clear', (req, res) => {
+  const { escopos, days } = req.body || {};
+  if (!Array.isArray(escopos) || escopos.length === 0) {
+    return res.status(400).json({ error: 'Escolha pelo menos um histórico para limpar' });
+  }
+  const validos = new Set(escoposDeHistorico().map((e) => e.id));
+  const desconhecido = escopos.find((e) => !validos.has(e));
+  if (desconhecido) {
+    return res.status(400).json({ error: `Histórico desconhecido: ${desconhecido}` });
+  }
+  const removidos = limparHistorico({ escopos, olderThanDays: Math.max(0, Number(days || 0)) });
+  const total = Object.values(removidos).reduce((a, b) => a + b, 0);
+  console.log(`[historico] ${req.user} limpou ${total} registros: ${JSON.stringify(removidos)}`);
+  res.json({ ok: true, removidos, total });
 });
 
 // --- Links de transporte (uplink, POP, torre) ---

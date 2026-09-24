@@ -612,6 +612,98 @@ select {
   white-space: nowrap;
 }
 
+.export-btn.danger { color: var(--bad); border-color: rgba(220,38,38,0.28); }
+.export-btn.danger:hover { background: var(--bad-bg); }
+
+.limpeza-fundo {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+
+.limpeza {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  width: min(520px, 100%);
+  max-height: 88vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.limpeza-head { display: flex; align-items: center; justify-content: space-between; }
+.limpeza-head strong { font-size: 1rem; }
+
+.limpeza-periodo { display: flex; flex-wrap: wrap; gap: 6px; }
+.limpeza-periodo .periodo {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.limpeza-periodo .periodo.ativo { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.limpeza-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.limpeza-lista label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0.5rem 0.6rem;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.limpeza-lista label:hover { background: var(--surface-2); }
+.limpeza-lista label.vazio { opacity: 0.45; cursor: default; }
+.limpeza-rotulo { flex: 1; }
+.limpeza-conta { color: var(--ink-faint); font-size: 0.74rem; font-variant-numeric: tabular-nums; }
+
+.limpeza-confirma {
+  border: 1px solid rgba(220,38,38,0.28);
+  background: var(--bad-bg);
+  border-radius: 11px;
+  padding: 11px;
+}
+.limpeza-confirma p { margin: 0 0 8px; font-size: 0.8rem; }
+.limpeza-confirma code { font-weight: 800; }
+.limpeza-confirma input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+
+.limpeza-ok { color: var(--ok-ink); font-size: 0.8rem; font-weight: 700; margin: 0; }
+
+.limpeza-acoes { display: flex; justify-content: flex-end; gap: 8px; }
+.limpeza-acoes .perigo {
+  background: var(--bad-solid);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 0.45rem 0.9rem;
+  font-weight: 800;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.limpeza-acoes .perigo:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .event-row { cursor: pointer; }
 .event-row:hover { background: var(--surface-2); }
 .event-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

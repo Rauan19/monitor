@@ -390,6 +390,7 @@ export default function App() {
   const [linksDisponiveis, setLinksDisponiveis] = useState(null);
   const [linksError, setLinksError] = useState('');
   const [linksBusy, setLinksBusy] = useState(false);
+  const [limpezaAberta, setLimpezaAberta] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [notificationsMeta, setNotificationsMeta] = useState(emptyMeta);
   const [notificationsPage, setNotificationsPage] = useState(1);
@@ -1299,6 +1300,11 @@ export default function App() {
                 Exportar CSV
               </a>
             )}
+            {tab === 'history' && (
+              <button type="button" className="export-btn danger" onClick={() => setLimpezaAberta(true)}>
+                Limpar histórico
+              </button>
+            )}
           </div>
         )}
 
@@ -1503,6 +1509,16 @@ export default function App() {
           <span>Mais</span>
         </button>
       </nav>
+
+      {limpezaAberta && (
+        <LimparHistorico
+          onFechar={() => setLimpezaAberta(false)}
+          onLimpou={() => {
+            setLimpezaAberta(false);
+            refresh();
+          }}
+        />
+      )}
 
       {detailSessionKey && (
         <ClientDetailDrawer
@@ -3068,6 +3084,165 @@ function MapBoard({ points, error, onOpenDetail, onRefresh }) {
           onCancel={() => setPendingLatLng(null)}
         />
       )}
+    </div>
+  );
+}
+
+const PERIODOS = [
+  { dias: 0, rotulo: 'Tudo' },
+  { dias: 7, rotulo: 'Mais de 7 dias' },
+  { dias: 30, rotulo: 'Mais de 30 dias' },
+  { dias: 90, rotulo: 'Mais de 90 dias' },
+];
+
+/**
+ * Limpeza de historico. Apagar nao tem volta, entao a tela mostra quantas
+ * linhas cada opcao vai remover ANTES de confirmar: "vai remover 74.480" e uma
+ * informacao bem diferente de "vai remover 12". E a confirmacao final exige
+ * digitar LIMPAR, pra nao acontecer por clique errado.
+ */
+function LimparHistorico({ onFechar, onLimpou }) {
+  const [itens, setItens] = useState([]);
+  const [escolhidos, setEscolhidos] = useState([]);
+  const [dias, setDias] = useState(30);
+  const [confirmacao, setConfirmacao] = useState('');
+  const [carregando, setCarregando] = useState(true);
+  const [erro, setErro] = useState('');
+  const [limpando, setLimpando] = useState(false);
+  const [resultado, setResultado] = useState(null);
+
+  const carregar = useCallback(async (d) => {
+    setCarregando(true);
+    try {
+      const res = await api.historyStats(d);
+      setItens(res.itens || []);
+      setErro('');
+    } catch (err) {
+      setErro(err.message || 'Falha ao consultar o histórico');
+    } finally {
+      setCarregando(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    carregar(dias);
+  }, [carregar, dias]);
+
+  const alternar = (id) =>
+    setEscolhidos((atual) => (atual.includes(id) ? atual.filter((x) => x !== id) : [...atual, id]));
+
+  const totalARemover = itens
+    .filter((i) => escolhidos.includes(i.id))
+    .reduce((soma, i) => soma + i.aRemover, 0);
+
+  const podeLimpar = escolhidos.length > 0 && totalARemover > 0 && confirmacao.trim().toUpperCase() === 'LIMPAR';
+
+  async function limpar() {
+    setLimpando(true);
+    try {
+      const res = await api.clearHistory(escolhidos, dias);
+      setResultado(res.total);
+      setErro('');
+      await carregar(dias);
+      setEscolhidos([]);
+      setConfirmacao('');
+      onLimpou?.();
+    } catch (err) {
+      setErro(err.message || 'Falha ao limpar');
+    } finally {
+      setLimpando(false);
+    }
+  }
+
+  return (
+    <div className="limpeza-fundo" onClick={onFechar}>
+      <div className="limpeza" onClick={(e) => e.stopPropagation()}>
+        <div className="limpeza-head">
+          <strong>Limpar histórico</strong>
+          <button type="button" className="ghost" onClick={onFechar}>
+            Fechar
+          </button>
+        </div>
+
+        <p className="muted">
+          Isso apaga os registros escolhidos para sempre. Os clientes, as OLTs, as portas e os celulares
+          cadastrados não são afetados.
+        </p>
+
+        <div className="limpeza-periodo">
+          {PERIODOS.map((p) => (
+            <button
+              key={p.dias}
+              type="button"
+              className={dias === p.dias ? 'periodo ativo' : 'periodo'}
+              onClick={() => setDias(p.dias)}
+            >
+              {p.rotulo}
+            </button>
+          ))}
+        </div>
+
+        {erro && (
+          <div className="banner" role="alert">
+            <strong>Erro</strong>
+            <span>{erro}</span>
+          </div>
+        )}
+
+        {carregando ? (
+          <p className="muted">Consultando…</p>
+        ) : (
+          <ul className="limpeza-lista">
+            {itens.map((i) => (
+              <li key={i.id}>
+                <label className={i.aRemover === 0 ? 'vazio' : ''}>
+                  <input
+                    type="checkbox"
+                    checked={escolhidos.includes(i.id)}
+                    disabled={i.aRemover === 0}
+                    onChange={() => alternar(i.id)}
+                  />
+                  <span className="limpeza-rotulo">{i.rotulo}</span>
+                  <span className="limpeza-conta">
+                    {i.aRemover === 0
+                      ? 'nada a remover'
+                      : `${i.aRemover.toLocaleString('pt-BR')} de ${i.total.toLocaleString('pt-BR')}`}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {resultado != null && (
+          <p className="limpeza-ok">{resultado.toLocaleString('pt-BR')} registros removidos.</p>
+        )}
+
+        {totalARemover > 0 && (
+          <div className="limpeza-confirma">
+            <p>
+              Vai remover <strong>{totalARemover.toLocaleString('pt-BR')}</strong> registros. Digite{' '}
+              <code>LIMPAR</code> para confirmar:
+            </p>
+            <input
+              type="text"
+              value={confirmacao}
+              onChange={(e) => setConfirmacao(e.target.value)}
+              placeholder="LIMPAR"
+              autoComplete="off"
+            />
+          </div>
+        )}
+
+        <div className="limpeza-acoes">
+          <button type="button" className="ghost" onClick={onFechar}>
+            Cancelar
+          </button>
+          <button type="button" className="perigo" disabled={!podeLimpar || limpando} onClick={limpar}>
+            {limpando ? 'Limpando…' : 'Limpar'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

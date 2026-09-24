@@ -1576,6 +1576,74 @@ export function listEventsForExport({ hours = 168, q = '', type = '' } = {}) {
     .all(...params);
 }
 
+// Historico que o operador pode limpar pela tela. Cada entrada diz a tabela, a
+// coluna de data e um rotulo pra interface, pra nao espalhar nome de tabela
+// pela API nem pelo front.
+const HISTORICOS = {
+  events: { tabela: 'events', coluna: 'created_at', rotulo: 'Conexões e quedas de clientes' },
+  notifications: { tabela: 'notifications', coluna: 'created_at', rotulo: 'Alertas enviados' },
+  links: { tabela: 'link_events', coluna: 'created_at', rotulo: 'Quedas de link' },
+  logs: { tabela: 'log_events', coluna: 'fetched_at', rotulo: 'Log do RouterOS' },
+  bandwidth: { tabela: 'bandwidth_samples', coluna: 'created_at', rotulo: 'Amostras de banda (gráficos)' },
+  system: { tabela: 'system_stats', coluna: 'created_at', rotulo: 'Histórico de CPU e memória' },
+};
+
+export function escoposDeHistorico() {
+  return Object.entries(HISTORICOS).map(([id, h]) => ({ id, rotulo: h.rotulo }));
+}
+
+/**
+ * Quantas linhas cada historico tem, e quantas seriam apagadas com o corte
+ * escolhido. Existe pra tela poder mostrar o numero ANTES de apagar: apagar
+ * historico nao tem volta, e "vai remover 74.480 linhas" e uma informacao bem
+ * diferente de "vai remover 12".
+ */
+export function contarHistorico({ olderThanDays = 0 } = {}) {
+  const database = getDb();
+  const corte = olderThanDays > 0 ? daysAgoIso(olderThanDays) : null;
+  return Object.entries(HISTORICOS).map(([id, h]) => {
+    const total = database.prepare(`SELECT COUNT(*) AS c FROM ${h.tabela}`).get().c;
+    const aRemover = corte
+      ? database.prepare(`SELECT COUNT(*) AS c FROM ${h.tabela} WHERE ${h.coluna} < ?`).get(corte).c
+      : total;
+    return { id, rotulo: h.rotulo, total, aRemover };
+  });
+}
+
+/**
+ * Apaga os historicos escolhidos. Com olderThanDays = 0 apaga tudo; com um
+ * numero, so o que e mais antigo que isso.
+ */
+export function limparHistorico({ escopos = [], olderThanDays = 0 } = {}) {
+  const database = getDb();
+  const corte = olderThanDays > 0 ? daysAgoIso(olderThanDays) : null;
+  const removidos = {};
+
+  const tx = database.transaction(() => {
+    for (const id of escopos) {
+      const h = HISTORICOS[id];
+      if (!h) continue; // id desconhecido e ignorado: nada de tabela vinda de fora
+      const r = corte
+        ? database.prepare(`DELETE FROM ${h.tabela} WHERE ${h.coluna} < ?`).run(corte)
+        : database.prepare(`DELETE FROM ${h.tabela}`).run();
+      removidos[id] = r.changes;
+    }
+  });
+  tx();
+
+  // O que estava memoizado foi calculado sobre dados que nao existem mais.
+  cacheAgregacao.clear();
+
+  // Devolve o espaco das paginas liberadas pro arquivo nao so crescer.
+  try {
+    database.pragma('wal_checkpoint(TRUNCATE)');
+  } catch {
+    // sem problema, a limpeza periodica tenta de novo
+  }
+
+  return removidos;
+}
+
 export function pruneOldData(days = 30) {
   const database = getDb();
   const cutoff = daysAgoIso(days);

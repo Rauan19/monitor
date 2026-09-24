@@ -105,6 +105,8 @@ npm start
 | `GET /api/export/disconnected.csv?hours=` | Exporta desconexões em CSV |
 | `GET /api/export/events.csv?hours=&type=` | Exporta histórico de eventos em CSV |
 | `GET /api/report/monthly?days=30` | Relatório em HTML pronto pra imprimir/salvar como PDF |
+| `GET /api/history/stats?days=` | Quantos registros cada histórico tem, e quantos seriam apagados |
+| `POST /api/history/clear` | Limpa os históricos escolhidos (`{escopos, days}`) |
 | `GET /api/links` | Situação de cada link vigiado (de pé/caído, desde quando, quedas em 24h) |
 | `GET /api/links/available` | Interfaces do CCR ainda não vigiadas (pro cadastro) |
 | `POST /api/links` | Passa a vigiar uma interface (`{name, label}`) |
@@ -116,6 +118,14 @@ npm start
 | `GET /api/notifications` | Histórico de alertas já enviados |
 
 Dados ficam em `server/data/monitor.db` (SQLite). Histórico de sistema/banda/log é limpo automaticamente após `RETENTION_DAYS` (padrão 30 dias).
+
+### Limpar histórico manualmente
+
+Aba **Histórico** → **Limpar histórico**. Dá pra escolher o que apagar (conexões e quedas, alertas, quedas de link, log do RouterOS, amostras de banda, CPU/memória) e o período (tudo, ou mais antigo que 7/30/90 dias).
+
+A tela mostra **quantos registros cada opção vai remover antes de confirmar**, e a confirmação exige digitar `LIMPAR`. Apagar não tem volta.
+
+Clientes, OLTs, portas nomeadas e celulares cadastrados pro push **não** são afetados: a rota só aceita os históricos dessa lista, então mandar outro nome de tabela não faz nada.
 
 ### Webhook
 
