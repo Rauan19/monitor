@@ -126,6 +126,10 @@ Se `WEBHOOK_URL` estiver definido no `.env`, o servidor faz um `POST` em JSON pr
 O servidor manda push pra todos os celulares com o app instalado e pros navegadores com notificação ativada nestes casos:
 
 - **Queda em massa**: 3+ clientes da mesma porta ONT ou da mesma região caem juntos numa janela curta. Útil pra pegar queda de OLT/porta antes do cliente ligar reclamando
+
+  O alerta dispara quando o grupo bate o mínimo **e** (representa boa parte da porta **ou** é um número grande em absoluto). Com o padrão, `OUTAGE_ALERT_ABSOLUTE` é igual ao mínimo, então 3 quedas na mesma porta já alertam, independente do tamanho da porta. Subindo esse valor, portas pequenas continuam alertando pelo percentual e as grandes só a partir do número escolhido.
+
+  > **O alerta agrupa por porta e por região, então depende desses campos preenchidos no cliente.** Cliente sem porta não entra em nenhum grupo e nunca gera alerta de porta. Preencha na ficha do cliente, ou use a calibração de porta (**Testar porta**).
 - **CCR fora do ar / voltou**: quando o próprio CCR para de responder e quando volta (fura a fila, por ser mais grave que um alerta de porta)
 
 Só avisa a queda do CCR se ele *estava* respondendo antes. Se o servidor subiu e nunca conseguiu conectar, isso é configuração errada, não queda, e não dispara push.
@@ -134,7 +138,8 @@ Configurável no `.env`:
 
 ```env
 OUTAGE_ALERT_THRESHOLD=3            # mínimo de clientes caídos no grupo
-OUTAGE_ALERT_PERCENT=0.5            # e pelo menos 50% do grupo (0..1)
+OUTAGE_ALERT_ABSOLUTE=3             # quantidade que dispara sozinha, sem olhar o percentual
+OUTAGE_ALERT_PERCENT=0.5            # ou pelo menos 50% do grupo (0..1)
 OUTAGE_ALERT_WINDOW_MINUTES=5       # janela onde as quedas contam como "juntas"
 OUTAGE_ALERT_COOLDOWN_MINUTES=30    # não repete o alerta da mesma porta/região antes disso
 OUTAGE_ALERT_GAP_MS=60000           # espaçamento entre pushes quando vários alertas disparam juntos
