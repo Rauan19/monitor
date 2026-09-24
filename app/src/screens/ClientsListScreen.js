@@ -36,13 +36,26 @@ export default function ClientsListScreen({ mode }) {
 
   const load = useCallback(async () => {
     try {
+      const aplicar = (res) => {
+        setRows(res.items || []);
+        setMeta({
+          page: res.page || 1,
+          pageSize: res.pageSize || PAGE_SIZE,
+          total: res.total || 0,
+          pages: res.pages || 1,
+        });
+      };
       const { data: res, stale, savedAt } = await withCache(
         `clients:${mode}:${query}:${page}`,
-        () => FETCHERS[mode]({ q: query, page, pageSize: PAGE_SIZE })
+        () => FETCHERS[mode]({ q: query, page, pageSize: PAGE_SIZE }),
+        (guardado, salvoEm) => {
+          aplicar(guardado);
+          setStaleAt(salvoEm);
+          setLoading(false);
+        }
       );
       setStaleAt(stale ? savedAt : null);
-      setRows(res.items || []);
-      setMeta({ page: res.page || 1, pageSize: res.pageSize || PAGE_SIZE, total: res.total || 0, pages: res.pages || 1 });
+      aplicar(res);
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar');

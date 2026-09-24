@@ -152,15 +152,26 @@ export default function MapScreen() {
 
   const load = useCallback(async () => {
     try {
-      const { data, stale, savedAt } = await withCache('map', async () => {
-        const [mapa, olts] = await Promise.all([api.mapPoints(), api.listOlts()]);
-        return { items: mapa.items, olts: olts.olts };
-      });
-      const porId = {};
-      for (const o of data.olts || []) porId[o.id] = o.name;
-      setOltsPorId(porId);
+      const aplicar = (d) => {
+        const porId = {};
+        for (const o of d.olts || []) porId[o.id] = o.name;
+        setOltsPorId(porId);
+        setPontos(d.items || []);
+      };
+      const { data, stale, savedAt } = await withCache(
+        'map',
+        async () => {
+          const [mapa, olts] = await Promise.all([api.mapPoints(), api.listOlts()]);
+          return { items: mapa.items, olts: olts.olts };
+        },
+        (guardado, salvoEm) => {
+          aplicar(guardado);
+          setStaleAt(salvoEm);
+          setLoading(false);
+        }
+      );
       setStaleAt(stale ? savedAt : null);
-      setPontos(data.items || []);
+      aplicar(data);
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar o mapa');

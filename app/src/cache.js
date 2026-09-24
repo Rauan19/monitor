@@ -44,7 +44,20 @@ export async function writeCache(key, data) {
  * Devolve { data, stale, savedAt }. Se falhar e nao houver cache, lanca o erro
  * original, pra tela mostrar o banner de erro como antes.
  */
-export async function withCache(key, fetcher) {
+export async function withCache(key, fetcher, aoReceberCache) {
+  // Entrega o que ja esta guardado ANTES de esperar a rede. Sem isso, o cache
+  // so servia quando a requisicao falhava: numa rede lenta (voltando de uma
+  // area sem sinal, 3G ruim) a tela ficava no "carregando" ate a resposta
+  // chegar, mesmo tendo os dados da ultima vez no aparelho. E por isso que o
+  // app parecia muito mais lento que o painel web, que roda em conexao boa.
+  //
+  // Padrao "mostra o que tem, atualiza quando chegar": o usuario ve a tela
+  // preenchida na hora e ela se corrige sozinha quando a resposta chega.
+  if (aoReceberCache) {
+    const guardado = await readCache(key);
+    if (guardado) aoReceberCache(guardado.data, guardado.savedAt);
+  }
+
   try {
     const data = await fetcher();
     writeCache(key, data); // sem await: nao atrasa a tela

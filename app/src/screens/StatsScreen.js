@@ -36,6 +36,22 @@ export default function StatsScreen() {
   const load = useCallback(async () => {
     try {
       const tzOffsetMinutes = new Date().getTimezoneOffset();
+      const aplicar = ({ tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes }) => {
+        setTopConsumers(tc.items || []);
+        setSla(slaData.items || []);
+        setSlaMeta(metaOf(slaData));
+        setHourlyLoad(
+          (hourly.items || []).map((h) => ({
+            value: h.avgDownBps + h.avgUpBps,
+            label: String(h.hour).padStart(2, '0'),
+          }))
+        );
+        setAnomalies(anomaliesRes.items || []);
+        setQueueUsage(queueUsageRes.items || []);
+        setQueueUsageMeta(metaOf(queueUsageRes));
+        setSlaByPort(slaPortRes.items || []);
+      };
+
       const { data: pacote, stale, savedAt } = await withCache(
         `stats:${topLimit}:${slaQuery}:${slaPage}:${queueUsagePage}`,
         async () => {
@@ -48,18 +64,15 @@ export default function StatsScreen() {
             api.slaByPort(30),
           ]);
           return { tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes };
+        },
+        (guardado, salvoEm) => {
+          aplicar(guardado);
+          setStaleAt(salvoEm);
+          setLoading(false);
         }
       );
       setStaleAt(stale ? savedAt : null);
-      const { tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes } = pacote;
-      setTopConsumers(tc.items || []);
-      setSla(slaData.items || []);
-      setSlaMeta(metaOf(slaData));
-      setHourlyLoad((hourly.items || []).map((h) => ({ value: h.avgDownBps + h.avgUpBps, label: String(h.hour).padStart(2, '0') })));
-      setAnomalies(anomaliesRes.items || []);
-      setQueueUsage(queueUsageRes.items || []);
-      setQueueUsageMeta(metaOf(queueUsageRes));
-      setSlaByPort(slaPortRes.items || []);
+      aplicar(pacote);
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar estatísticas');

@@ -127,10 +127,20 @@ export default function HomeScreen() {
   // custam ~0ms e valem a pena a cada 10s.
   const loadRapido = useCallback(async () => {
     try {
-      const { data, stale, savedAt } = await withCache('home:rapido', async () => {
-        const [dash, status] = await Promise.all([api.dashboard(), api.status()]);
-        return { dash, status };
-      });
+      const { data, stale, savedAt } = await withCache(
+        'home:rapido',
+        async () => {
+          const [dash, status] = await Promise.all([api.dashboard(), api.status()]);
+          return { dash, status };
+        },
+        // Mostra os numeros da ultima vez antes da rede responder, pra tela nao
+        // nascer vazia quando a conexao esta ruim.
+        (guardado, salvoEm) => {
+          setDados((atual) => ({ ...atual, ...guardado }));
+          setStaleAt(salvoEm);
+          setLoading(false);
+        }
+      );
       setStaleAt(stale ? savedAt : null);
       setDados((atual) => ({ ...atual, ...data }));
       setError('');
@@ -147,17 +157,21 @@ export default function HomeScreen() {
   // 2 min, entao pedir a cada 2 min casa com ele.
   const loadPesado = useCallback(async () => {
     try {
-      const { data } = await withCache('home:pesado', async () => {
-        const tz = new Date().getTimezoneOffset();
-        const [sys, hist, hourly, top, notifs] = await Promise.all([
-          api.system(),
-          api.systemHistory(24),
-          api.hourlyLoad(7, tz),
-          api.topConsumers(24, 5),
-          api.notifications({ page: 1, pageSize: 3 }),
-        ]);
-        return { sys, hist, hourly, top, notifs };
-      });
+      const { data } = await withCache(
+        'home:pesado',
+        async () => {
+          const tz = new Date().getTimezoneOffset();
+          const [sys, hist, hourly, top, notifs] = await Promise.all([
+            api.system(),
+            api.systemHistory(24),
+            api.hourlyLoad(7, tz),
+            api.topConsumers(24, 5),
+            api.notifications({ page: 1, pageSize: 3 }),
+          ]);
+          return { sys, hist, hourly, top, notifs };
+        },
+        (guardado) => setDados((atual) => ({ ...atual, ...guardado }))
+      );
       setDados((atual) => ({ ...atual, ...data }));
     } catch {
       // os numeros ao vivo continuam valendo; nao derruba a tela por isso

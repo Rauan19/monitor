@@ -149,12 +149,28 @@ export default function NotificationsScreen() {
 
   const load = useCallback(async () => {
     try {
-      const { data: res, stale, savedAt } = await withCache(`notifications:${page}`, () =>
-        api.notifications({ page, pageSize: PAGE_SIZE })
+      const aplicar = (res) => {
+        setRows(res.items || []);
+        setMeta({
+          page: res.page || 1,
+          pageSize: res.pageSize || PAGE_SIZE,
+          total: res.total || 0,
+          pages: res.pages || 1,
+        });
+      };
+      // O 3o argumento roda com o que ja esta guardado, antes da rede
+      // responder: a tela aparece preenchida na hora.
+      const { data: res, stale, savedAt } = await withCache(
+        `notifications:${page}`,
+        () => api.notifications({ page, pageSize: PAGE_SIZE }),
+        (guardado, salvoEm) => {
+          aplicar(guardado);
+          setStaleAt(salvoEm);
+          setLoading(false);
+        }
       );
       setStaleAt(stale ? savedAt : null);
-      setRows(res.items || []);
-      setMeta({ page: res.page || 1, pageSize: res.pageSize || PAGE_SIZE, total: res.total || 0, pages: res.pages || 1 });
+      aplicar(res);
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar notificações');

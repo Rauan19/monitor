@@ -72,16 +72,27 @@ export default function LinksScreen() {
 
   const load = useCallback(async () => {
     try {
-      const { data, stale, savedAt } = await withCache('links', async () => {
-        const [st, ev] = await Promise.all([
-          api.links(),
-          api.linkEvents({ hours: 168, page: 1, pageSize: 15 }),
-        ]);
-        return { links: st.items, eventos: ev.items };
-      });
+      const aplicar = (d) => {
+        setLinks(d.links || []);
+        setEventos(d.eventos || []);
+      };
+      const { data, stale, savedAt } = await withCache(
+        'links',
+        async () => {
+          const [st, ev] = await Promise.all([
+            api.links(),
+            api.linkEvents({ hours: 168, page: 1, pageSize: 15 }),
+          ]);
+          return { links: st.items, eventos: ev.items };
+        },
+        (guardado, salvoEm) => {
+          aplicar(guardado);
+          setStaleAt(salvoEm);
+          setLoading(false);
+        }
+      );
       setStaleAt(stale ? savedAt : null);
-      setLinks(data.links || []);
-      setEventos(data.eventos || []);
+      aplicar(data);
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar os links');
