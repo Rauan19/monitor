@@ -176,18 +176,10 @@ async function tick() {
       );
     }
 
+    // Sem push de "CCR voltou": o par dele, o de queda, saiu (veja o catch
+    // abaixo), e avisar so a volta de algo que nunca foi anunciado nao diz nada.
     if (wasConnected === false) {
       notifyWebhook({ type: 'ccr_up', host: config.mikrotik.host });
-      if (config.notifyCcrState) {
-        enqueueNotification(
-          {
-            title: '✅ CCR voltou a responder',
-            body: `A conexão com ${config.mikrotik.host} foi restabelecida. ${result.onlineCount} clientes online.`,
-            data: { type: 'ccr_up', host: config.mikrotik.host, onlineCount: result.onlineCount },
-          },
-          { priority: true }
-        );
-      }
     }
     wasConnected = true;
 
@@ -230,26 +222,13 @@ async function tick() {
       onlineCount: 0,
       error: message,
     });
+    // Nao existe mais push de "CCR fora do ar". Qualquer leitura lenta que
+    // estoura o timeout cai aqui, e numa rede com mil sessoes PPPoE isso
+    // acontece direto: o aviso disparava a toda hora por conta de ciclo ruim,
+    // nao de queda. A queda real continua no status do painel, no historico e
+    // no webhook, que e onde ela serve pra alguma coisa.
     if (wasConnected !== false) {
       notifyWebhook({ type: 'ccr_down', host: config.mikrotik.host, error: message });
-      // Push so com NOTIFY_CCR_STATE=true. Uma leitura lenta que estoura o
-      // timeout ja cai aqui, e isso acontece direto numa rede com mil sessoes
-      // PPPoE, entao o aviso virava barulho de cada ciclo ruim. A queda continua
-      // registrada no status e no webhook, que e onde ela e util.
-      //
-      // E, quando ligado, so avisa se JA estava conectado antes. Servidor que
-      // subiu e nunca falou com o CCR (wasConnected === null) nao e queda, e
-      // configuracao errada, e nao vale acordar ninguem.
-      if (config.notifyCcrState && wasConnected === true) {
-        enqueueNotification(
-          {
-            title: '🔴 CCR fora do ar',
-            body: `Sem resposta de ${config.mikrotik.host}: ${message}`,
-            data: { type: 'ccr_down', host: config.mikrotik.host, error: message },
-          },
-          { priority: true }
-        );
-      }
     }
     wasConnected = false;
 

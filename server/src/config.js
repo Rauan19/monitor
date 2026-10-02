@@ -17,11 +17,6 @@ export const config = {
   dbPath: process.env.DB_PATH || path.join(__dirname, '../data/monitor.db'),
   webhookUrl: process.env.WEBHOOK_URL || '',
   webhookNotifyClients: String(process.env.WEBHOOK_NOTIFY_CLIENTS || '').toLowerCase() === 'true',
-  // Push de CCR fora do ar/voltou. Desligado por padrao: uma leitura que demora
-  // e estoura o timeout ja marcava o CCR como fora, e numa rede com mil sessoes
-  // PPPoE isso acontece com frequencia, entao virava alerta o tempo todo. A
-  // queda real continua indo pro webhook e pro historico.
-  notifyCcrState: process.env.NOTIFY_CCR_STATE === 'true',
   outageAlert: {
     threshold: Number(process.env.OUTAGE_ALERT_THRESHOLD || 3),
     percentThreshold: Number(process.env.OUTAGE_ALERT_PERCENT || 0.5),

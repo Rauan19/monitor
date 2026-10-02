@@ -11,8 +11,9 @@ let processing = false;
 
 /**
  * Enfileira uma notificação pra envio.
- * `priority` fura a fila: o CCR inteiro fora do ar é mais grave que alertas de
- * porta e não pode ficar esperando 1 min por cada alerta que já estava na fila.
+ * `priority` fura a fila: um link de transporte caindo derruba todo mundo atras
+ * dele e é mais grave que alerta de porta, então não pode ficar esperando 1 min
+ * por cada alerta que já estava na fila.
  */
 export function enqueueNotification(payload, { priority = false } = {}) {
   if (priority) queue.unshift(payload);
