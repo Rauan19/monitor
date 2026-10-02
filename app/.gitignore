@@ -41,6 +41,14 @@ yarn-error.*
 *firebase-adminsdk*.json
 *service-account*.json
 
+# Assinatura do APK local (scripts/build-apk.mjs). A keystore ja cai em *.jks
+# acima; a senha vem aqui. Perder o par significa que nenhum APK futuro instala
+# por cima do que esta no celular, so desinstalando: guarde os dois fora daqui.
+android-signing.properties
+
+# APK gerado pelo build local
+/build
+
 # typescript
 *.tsbuildinfo
 
