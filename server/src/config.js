@@ -17,6 +17,11 @@ export const config = {
   dbPath: process.env.DB_PATH || path.join(__dirname, '../data/monitor.db'),
   webhookUrl: process.env.WEBHOOK_URL || '',
   webhookNotifyClients: String(process.env.WEBHOOK_NOTIFY_CLIENTS || '').toLowerCase() === 'true',
+  // Push de CCR fora do ar/voltou. Desligado por padrao: uma leitura que demora
+  // e estoura o timeout ja marcava o CCR como fora, e numa rede com mil sessoes
+  // PPPoE isso acontece com frequencia, entao virava alerta o tempo todo. A
+  // queda real continua indo pro webhook e pro historico.
+  notifyCcrState: process.env.NOTIFY_CCR_STATE === 'true',
   outageAlert: {
     threshold: Number(process.env.OUTAGE_ALERT_THRESHOLD || 3),
     percentThreshold: Number(process.env.OUTAGE_ALERT_PERCENT || 0.5),
@@ -34,6 +39,11 @@ export const config = {
     absoluteThreshold: Number(process.env.OUTAGE_ALERT_ABSOLUTE || 3),
     windowMinutes: Number(process.env.OUTAGE_ALERT_WINDOW_MINUTES || 5),
     cooldownMinutes: Number(process.env.OUTAGE_ALERT_COOLDOWN_MINUTES || 30),
+    // Quanto esperar antes de avisar. A maioria das quedas e curta: ONT que
+    // reiniciou, piscada de energia, cliente que desligou e ligou o roteador.
+    // Avisar na hora enche o celular de alerta de coisa que ja voltou. Agora o
+    // grupo precisa continuar fora depois desse tempo pra virar notificacao.
+    confirmMinutes: Number(process.env.OUTAGE_ALERT_CONFIRM_MINUTES || 5),
   },
   mikrotik: {
     host: process.env.MIKROTIK_HOST || '192.168.88.1',

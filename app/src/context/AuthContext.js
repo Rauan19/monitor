@@ -12,26 +12,25 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     (async () => {
-      const url = await getServerUrl();
+      // Ler os tres de uma vez. Sao leituras independentes e em sequencia cada
+      // uma esperava a anterior sem motivo.
+      const [url, token, username] = await Promise.all([getServerUrl(), getToken(), getUsername()]);
       setServerUrlState(url);
-      const token = await getToken();
-      const username = await getUsername();
+
+      // Abrir o app NAO espera mais o servidor responder.
+      //
+      // Antes aqui tinha um `await api.me()` antes de liberar a tela, e o
+      // RootNavigator nao renderiza nada enquanto `checking` e true. Resultado:
+      // em rede ruim o app ficava segundos numa tela preta antes de mostrar
+      // qualquer coisa, enquanto o web abria na hora. E a espera nao servia pra
+      // nada: o token e local e as telas ja mostram o cache offline sozinhas.
+      //
+      // Entao entramos direto com a sessao guardada e conferimos por tras. Se o
+      // token estiver mesmo morto, o 401 cai no onSessaoInvalida abaixo e o app
+      // volta pro login em seguida. Erro de rede nao derruba a sessao.
       if (url && token && username) {
-        try {
-          await api.me();
-          setUser(username);
-        } catch (err) {
-          // Este era o motivo de deslogar "do nada". Qualquer erro aqui apagava
-          // a sessao: abrir o app com sinal fraco, com timeout, ou com o
-          // servidor devolvendo 502 jogava fora um token perfeitamente valido.
-          // So 401 significa sessao invalida. Nos outros casos o usuario entra
-          // normalmente e as telas mostram o cache offline com o aviso.
-          if (err?.status === 401) {
-            await clearSession();
-          } else {
-            setUser(username);
-          }
-        }
+        setUser(username);
+        api.me().catch(() => {});
       }
       setChecking(false);
     })();

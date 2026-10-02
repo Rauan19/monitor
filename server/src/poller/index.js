@@ -1,6 +1,13 @@
 import { config } from '../config.js';
 import { mikrotik } from '../mikrotik/client.js';
-import { getOlt, getRecentDisconnectGroups, listPortLabels, updatePollStatus, upsertOnlineSessions } from '../db/index.js';
+import {
+  contarQuedaAtual,
+  getOlt,
+  getRecentDisconnectGroups,
+  listPortLabels,
+  updatePollStatus,
+  upsertOnlineSessions,
+} from '../db/index.js';
 import { updateBandwidth } from './bandwidth.js';
 import { notifyWebhook } from '../notify.js';
 import { enqueueNotification } from '../notifyQueue.js';
@@ -16,10 +23,41 @@ let wasConnected = null; // null = ainda não sabemos
 // reconexao custa um login novo e nao conserta nada.
 const FALHAS_ATE_RECONECTAR = 3;
 let falhasSeguidas = 0;
-const outageCooldowns = new Map(); // "port:3" | "region:Centro" -> timestamp do último push
+const outageCooldowns = new Map(); // "port:3" | "region:Centro" -> timestamp do ultimo push
 
-function checkCorrelatedOutages() {
-  const { threshold, percentThreshold, absoluteThreshold, windowMinutes, cooldownMinutes } =
+// Grupos que cairam e estao sob observacao, esperando pra ver se voltam.
+// chave -> { desde, oltId, port, region }
+const emObservacao = new Map();
+
+function descreverPorta(oltId, port) {
+  const olt = getOlt(oltId);
+  const label = listPortLabels(oltId)[port];
+  const texto = [
+    olt ? `OLT ${olt.name}` : null,
+    label ? `Porta ${port} (${label})` : `Porta ${port}`,
+  ]
+    .filter(Boolean)
+    .join(', ');
+  return { olt, label, texto };
+}
+
+/**
+ * Queda em massa, em duas etapas.
+ *
+ * Antes isso avisava no instante em que o grupo se formava, e o ciclo roda a
+ * cada poucos segundos: ONT que reiniciou, piscada de energia ou cliente
+ * mexendo no roteador ja viravam push. Quem recebia reclamava, com razao, que
+ * notificava demais, e o alerta que chega sempre acaba ignorado.
+ *
+ * Agora o grupo detectado so entra em observacao. O push sai depois de
+ * `confirmMinutes` e apenas se aquele mesmo grupo CONTINUAR fora. Quem voltou
+ * no meio do caminho sai da conta em silencio. Em troca o aviso de queda real
+ * atrasa esses minutos, que e o preco de ele significar alguma coisa.
+ */
+// Exportada pra ser exercitada pelos testes: a confirmacao em duas etapas
+// depende de estado entre chamadas, e e justamente isso que precisa de prova.
+export function checkCorrelatedOutages() {
+  const { threshold, percentThreshold, absoluteThreshold, windowMinutes, cooldownMinutes, confirmMinutes } =
     config.outageAlert;
 
   // Alerta quando o grupo bate o minimo E (representa boa parte da porta OU e
@@ -27,59 +65,94 @@ function checkCorrelatedOutages() {
   // queda de 4 clientes numa porta grande; so o absoluto faria porta pequena
   // alertar por qualquer coisa.
   const deveAlertar = (grupo) =>
-    grupo.percent >= percentThreshold || grupo.count >= absoluteThreshold;
-  const { byPort, byRegion } = getRecentDisconnectGroups({ minutes: windowMinutes, threshold });
+    grupo.count >= threshold && (grupo.percent >= percentThreshold || grupo.count >= absoluteThreshold);
+
   const now = Date.now();
   const cooldownMs = cooldownMinutes * 60 * 1000;
+  const confirmMs = confirmMinutes * 60 * 1000;
+
+  // --- etapa 1: quem acabou de cair entra na fila de observacao ---
+  const { byPort, byRegion } = getRecentDisconnectGroups({ minutes: windowMinutes, threshold });
+
+  const observar = (key, alvo) => {
+    if (emObservacao.has(key)) return; // ja esperando, nao reinicia o relogio
+    if (now - (outageCooldowns.get(key) || 0) < cooldownMs) return;
+    emObservacao.set(key, { desde: now, ...alvo });
+  };
 
   for (const group of byPort) {
     if (!deveAlertar(group)) continue;
-    const key = `olt:${group.oltId || 0}:port:${group.port}`;
-    const lastSent = outageCooldowns.get(key) || 0;
-    if (now - lastSent < cooldownMs) continue;
-    outageCooldowns.set(key, now);
-    const olt = getOlt(group.oltId);
-    const label = listPortLabels(group.oltId)[group.port];
-    const portDesc = [olt ? `OLT ${olt.name}` : null, label ? `Porta ${group.port} (${label})` : `Porta ${group.port}`]
-      .filter(Boolean)
-      .join(', ');
-    const pct = Math.round(group.percent * 100);
-    enqueueNotification({
-      title: `⚠️ Queda em massa: ${portDesc}`,
-      body: `${group.count} de ${group.total} clientes caíram na ${portDesc} (${pct}%) nos últimos ${windowMinutes} min.`,
-      data: {
-        type: 'outage_port',
-        oltId: group.oltId || null,
-        oltName: olt?.name || null,
-        port: group.port,
-        label: label || null,
-        count: group.count,
-        total: group.total,
-        percent: group.percent,
-        names: group.names,
-      },
+    observar(`olt:${group.oltId || 0}:port:${group.port}`, {
+      oltId: group.oltId || null,
+      port: group.port,
+      region: null,
     });
   }
-
   for (const group of byRegion) {
     if (!deveAlertar(group)) continue;
-    const key = `region:${group.region}`;
-    const lastSent = outageCooldowns.get(key) || 0;
-    if (now - lastSent < cooldownMs) continue;
+    observar(`region:${group.region}`, { oltId: null, port: null, region: group.region });
+  }
+
+  // --- etapa 2: reconferir os que estao em observacao ---
+  // Nao olha mais a janela de queda: a essa altura aquelas desconexoes ja
+  // sairam dela. A pergunta aqui e so "desse grupo, quantos continuam fora
+  // agora?".
+  for (const [key, alvo] of emObservacao) {
+    let atual;
+    try {
+      atual = contarQuedaAtual(alvo);
+    } catch (err) {
+      console.error('[poller] erro ao reconferir queda:', err?.message || err);
+      continue;
+    }
+    const percent = atual.total > 0 ? atual.count / atual.total : 0;
+
+    if (!deveAlertar({ count: atual.count, percent })) {
+      emObservacao.delete(key); // voltaram, nao era queda de verdade
+      continue;
+    }
+    if (now - alvo.desde < confirmMs) continue; // ainda no prazo de espera
+
+    emObservacao.delete(key);
     outageCooldowns.set(key, now);
-    const pct = Math.round(group.percent * 100);
-    enqueueNotification({
-      title: `⚠️ Queda em massa: ${group.region}`,
-      body: `${group.count} de ${group.total} clientes caíram em "${group.region}" (${pct}%) nos últimos ${windowMinutes} min.`,
-      data: {
-        type: 'outage_region',
-        region: group.region,
-        count: group.count,
-        total: group.total,
-        percent: group.percent,
-        names: group.names,
-      },
-    });
+
+    const minutosFora = Math.max(1, Math.round((now - alvo.desde) / 60000));
+    const pct = Math.round(percent * 100);
+    const nomes = atual.names.slice(0, 40);
+
+    if (alvo.region != null) {
+      enqueueNotification({
+        title: `\u26a0\ufe0f Queda em massa: ${alvo.region}`,
+        body: `${atual.count} de ${atual.total} clientes de "${alvo.region}" (${pct}%) seguem fora ha ${minutosFora} min.`,
+        data: {
+          type: 'outage_region',
+          region: alvo.region,
+          count: atual.count,
+          total: atual.total,
+          percent,
+          minutesDown: minutosFora,
+          names: nomes,
+        },
+      });
+    } else {
+      const { olt, label, texto } = descreverPorta(alvo.oltId, alvo.port);
+      enqueueNotification({
+        title: `\u26a0\ufe0f Queda em massa: ${texto}`,
+        body: `${atual.count} de ${atual.total} clientes da ${texto} (${pct}%) seguem fora ha ${minutosFora} min.`,
+        data: {
+          type: 'outage_port',
+          oltId: alvo.oltId,
+          oltName: olt?.name || null,
+          port: alvo.port,
+          label: label || null,
+          count: atual.count,
+          total: atual.total,
+          percent,
+          minutesDown: minutosFora,
+          names: nomes,
+        },
+      });
+    }
   }
 }
 
@@ -105,14 +178,16 @@ async function tick() {
 
     if (wasConnected === false) {
       notifyWebhook({ type: 'ccr_up', host: config.mikrotik.host });
-      enqueueNotification(
-        {
-          title: '✅ CCR voltou a responder',
-          body: `A conexão com ${config.mikrotik.host} foi restabelecida. ${result.onlineCount} clientes online.`,
-          data: { type: 'ccr_up', host: config.mikrotik.host, onlineCount: result.onlineCount },
-        },
-        { priority: true }
-      );
+      if (config.notifyCcrState) {
+        enqueueNotification(
+          {
+            title: '✅ CCR voltou a responder',
+            body: `A conexão com ${config.mikrotik.host} foi restabelecida. ${result.onlineCount} clientes online.`,
+            data: { type: 'ccr_up', host: config.mikrotik.host, onlineCount: result.onlineCount },
+          },
+          { priority: true }
+        );
+      }
     }
     wasConnected = true;
 
@@ -124,7 +199,10 @@ async function tick() {
       });
     }
 
-    if (result.newlyDisconnected.length && !getActiveCalibration()) {
+    // Roda em todo ciclo, e nao so quando alguem cai: a confirmacao precisa
+    // reconferir os grupos em observacao mesmo num ciclo sem queda nova, que e
+    // justamente o ciclo em que o grupo ou voltou ou continua fora.
+    if (!getActiveCalibration()) {
       try {
         checkCorrelatedOutages();
       } catch (err) {
@@ -154,10 +232,15 @@ async function tick() {
     });
     if (wasConnected !== false) {
       notifyWebhook({ type: 'ccr_down', host: config.mikrotik.host, error: message });
-      // Só avisa quando JÁ estava conectado antes (wasConnected === true). Se o
-      // servidor subiu e nunca conseguiu falar com o CCR (wasConnected === null),
-      // não é uma queda, é configuração errada, e não vale acordar ninguém.
-      if (wasConnected === true) {
+      // Push so com NOTIFY_CCR_STATE=true. Uma leitura lenta que estoura o
+      // timeout ja cai aqui, e isso acontece direto numa rede com mil sessoes
+      // PPPoE, entao o aviso virava barulho de cada ciclo ruim. A queda continua
+      // registrada no status e no webhook, que e onde ela e util.
+      //
+      // E, quando ligado, so avisa se JA estava conectado antes. Servidor que
+      // subiu e nunca falou com o CCR (wasConnected === null) nao e queda, e
+      // configuracao errada, e nao vale acordar ninguem.
+      if (config.notifyCcrState && wasConnected === true) {
         enqueueNotification(
           {
             title: '🔴 CCR fora do ar',

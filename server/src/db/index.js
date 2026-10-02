@@ -1076,6 +1076,44 @@ function daysAgoIso(days) {
  * Agrupa quedas recentes por porta e por região, pra detectar queda em massa
  * (ex: OLT/porta caiu e derrubou vários clientes juntos) e disparar push.
  */
+/**
+ * Quantos clientes de uma porta (ou regiao) estao offline NESTE momento.
+ *
+ * Existe por causa da confirmacao do alerta: a deteccao olha quem caiu nos
+ * ultimos minutos, mas na hora de confirmar, minutos depois, aquelas quedas ja
+ * sairam da janela. Aqui a pergunta e outra e independe de janela: "desse
+ * grupo, quantos continuam fora agora?".
+ */
+export function contarQuedaAtual({ oltId = null, port = null, region = null } = {}) {
+  const database = getDb();
+  if (region != null) {
+    const total = database
+      .prepare(`SELECT COUNT(*) AS c FROM sessions WHERE loc_region = ?`)
+      .get(region).c;
+    const linhas = database
+      .prepare(
+        `SELECT COALESCE(alias, name) AS nome FROM sessions
+         WHERE loc_region = ? AND is_online = 0`
+      )
+      .all(region);
+    return { count: linhas.length, total, names: linhas.map((l) => l.nome) };
+  }
+
+  const total = database
+    .prepare(
+      `SELECT COUNT(*) AS c FROM sessions
+       WHERE ont_port = ? AND (olt_id = ? OR (olt_id IS NULL AND ? IS NULL))`
+    )
+    .get(port, oltId, oltId).c;
+  const linhas = database
+    .prepare(
+      `SELECT COALESCE(alias, name) AS nome FROM sessions
+       WHERE ont_port = ? AND (olt_id = ? OR (olt_id IS NULL AND ? IS NULL)) AND is_online = 0`
+    )
+    .all(port, oltId, oltId);
+  return { count: linhas.length, total, names: linhas.map((l) => l.nome) };
+}
+
 export function getRecentDisconnectGroups({ minutes = 5, threshold = 3 } = {}) {
   const database = getDb();
   const since = new Date(Date.now() - minutes * 60 * 1000).toISOString();
