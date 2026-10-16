@@ -1258,6 +1258,25 @@ export function insertSystemStat(stat) {
     );
 }
 
+/**
+ * Ultima leitura de recursos do CCR que foi gravada.
+ *
+ * Existe pra rota /api/system poder responder na hora quando o CCR esta lento
+ * em vez de deixar o app esperando o timeout e devolver 502. O system-poller
+ * grava de minuto em minuto, entao isso e no maximo um minuto atrasado.
+ */
+export function ultimoSystemStat() {
+  const database = getDb();
+  return (
+    database
+      .prepare(
+        `SELECT created_at, cpu_load, free_memory, total_memory, voltage, temperature, uptime
+         FROM system_stats ORDER BY created_at DESC LIMIT 1`
+      )
+      .get() || null
+  );
+}
+
 export function listSystemStats({ hours = 24 } = {}) {
   const database = getDb();
   const since = hoursAgoIso(hours);

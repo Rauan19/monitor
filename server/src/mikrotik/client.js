@@ -52,7 +52,8 @@ export class MikroTikClient {
     this.pending = [];
     this.tagSeq = 1;
     this._cache = new Map(); // chave -> { em, valor }
-    this._emAndamento = new Map(); // chave -> Promise
+    this._emAndamento = new Map();
+    this._avisouFiltroInterface = false; // chave -> Promise
   }
 
   async connect() {
@@ -451,15 +452,48 @@ export class MikroTikClient {
    * Somente leitura: estado e contadores de erro/drop de todas as interfaces.
    */
   async getInterfaces() {
-    return this._comCache('getInterfaces', 5000, () => this._getInterfaces());
+    // TTL maior que o intervalo do poller (10s). Com 5s o cache nunca acertava:
+    // cada ciclo do poller refazia a leitura, e um celular abrindo a tela de
+    // interfaces no meio fazia outra. Com 15s o ciclo do poller e as telas
+    // compartilham a mesma resposta.
+    return this._comCache('getInterfaces', 15000, () => this._getInterfaces());
   }
 
   async _getInterfaces() {
     try {
-      const rows = await this._printRows(
-        '/interface',
-        'name,type,running,disabled,rx-byte,tx-byte,rx-drop,tx-drop,rx-error,tx-error,link-downs'
-      );
+      const props =
+        'name,type,running,disabled,rx-byte,tx-byte,rx-drop,tx-drop,rx-error,tx-error,link-downs';
+
+      // Pede ao CCR todas as interfaces MENOS as pppoe-in.
+      //
+      // Isso aqui era a consulta mais pesada do sistema. Quem chama precisa dos
+      // links de transporte (uplink, fibra de POP, radio de torre): uma duzia de
+      // interfaces. Sem filtro o CCR montava a tabela inteira, e numa rede com
+      // mil sessoes PPPoE isso e mil e poucas linhas com 11 propriedades cada,
+      // a cada ciclo. Era de longe o maior consumidor de CPU do roteador no
+      // monitor, e e o que fazia as leituras estourarem o timeout.
+      //
+      // Sintaxe da query da API: ?type=pppoe-in empilha a comparacao e ?#!
+      // inverte o topo da pilha. Sobra tudo que nao e pppoe-in.
+      let rows = await this._printRows('/interface', props, ['?type=pppoe-in', '?#!']);
+
+      // A negacao foi deduzida das regras da pilha de query, nao de um exemplo
+      // dos docs, e nao deu pra testar contra um CCR de verdade. Se ela nao
+      // funcionar nesta versao de RouterOS o resultado vem vazio, e quem chama
+      // trata vazio como falha de leitura: o monitoramento de link morreria
+      // calado. Entao: vazio aqui cai pra consulta sem filtro, que e o
+      // comportamento antigo, e avisa uma vez no log.
+      if (!rows.length) {
+        if (!this._avisouFiltroInterface) {
+          this._avisouFiltroInterface = true;
+          console.warn(
+            '[mikrotik] o filtro ?#! nao devolveu interfaces nesta versao de RouterOS; ' +
+              'voltando a ler a tabela inteira (mais pesado pro CCR)'
+          );
+        }
+        rows = await this._printRows('/interface', props);
+      }
+
       return rows.map((r) => ({
         name: r.name || null,
         type: r.type || null,

@@ -29,6 +29,7 @@ import {
   listPortLabels,
   listPushTokens,
   listSystemStats,
+  ultimoSystemStat,
   addMonitoredLink,
   contarHistorico,
   escoposDeHistorico,
@@ -287,7 +288,40 @@ apiRouter.get('/system', async (_req, res) => {
     ]);
     res.json({ resource, health });
   } catch (err) {
-    res.status(502).json({ error: err.message || 'Falha ao consultar o CCR' });
+    // CCR lento ou fora do ar nao pode virar tela vazia no app.
+    //
+    // Antes isso devolvia 502, e a tela de inicio pede /api/system junto com
+    // outras quatro chamadas num Promise.all: uma leitura que estourava o
+    // timeout de 15s travava o carregamento inteiro e terminava sem dado. Como
+    // o system-poller grava CPU e memoria de minuto em minuto, aqui da pra
+    // responder com a ultima leitura conhecida, na hora.
+    //
+    // Vai marcado com `stale` e `desde` pra tela poder dizer de quando e: dado
+    // velho apresentado como atual seria pior que nao mostrar nada.
+    const ultimo = ultimoSystemStat();
+    if (!ultimo) {
+      return res.status(502).json({ error: err.message || 'Falha ao consultar o CCR' });
+    }
+    res.json({
+      stale: true,
+      desde: ultimo.created_at,
+      resource: {
+        cpuLoad: ultimo.cpu_load,
+        freeMemory: ultimo.free_memory,
+        totalMemory: ultimo.total_memory,
+        uptime: ultimo.uptime,
+        // Nao sao gravados no historico: so vem numa leitura ao vivo.
+        version: null,
+        boardName: null,
+        cpuCount: null,
+        freeHddSpace: null,
+        totalHddSpace: null,
+      },
+      health: {
+        ...(ultimo.voltage != null ? { voltage: ultimo.voltage } : {}),
+        ...(ultimo.temperature != null ? { temperature: ultimo.temperature } : {}),
+      },
+    });
   }
 });
 

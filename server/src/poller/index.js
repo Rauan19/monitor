@@ -23,6 +23,11 @@ let wasConnected = null; // null = ainda não sabemos
 // reconexao custa um login novo e nao conserta nada.
 const FALHAS_ATE_RECONECTAR = 3;
 let falhasSeguidas = 0;
+
+// De quantos em quantos ciclos ler os contadores de banda. Com o poller a cada
+// 10s, 3 da uma leitura a cada 30s.
+const CICLOS_POR_LEITURA_DE_BANDA = 3;
+let ciclo = 0;
 const outageCooldowns = new Map(); // "port:3" | "region:Centro" -> timestamp do ultimo push
 
 // Grupos que cairam e estao sob observacao, esperando pra ver se voltam.
@@ -159,6 +164,7 @@ export function checkCorrelatedOutages() {
 async function tick() {
   if (running) return;
   running = true;
+  ciclo++;
 
   try {
     const clients = await mikrotik.getPppActive();
@@ -202,11 +208,21 @@ async function tick() {
       }
     }
 
-    try {
-      const counters = await mikrotik.getPppoeInterfaceCounters();
-      updateBandwidth(counters);
-    } catch (bwErr) {
-      console.error('[poller] erro ao ler contadores de banda:', bwErr?.message || bwErr);
+    // Banda por cliente nao precisa do ritmo do poller.
+    //
+    // Esta leitura pede ao CCR os contadores das mais de mil interfaces PPPoE.
+    // Rodando a cada 10s junto com /ppp/active, era a segunda consulta mais
+    // pesada e a que mais aparecia nos timeouts do log. A banda e calculada por
+    // DIFERENCA de contador, entao um intervalo maior nao perde informacao: so
+    // suaviza o valor, e a amostra que vai pro historico e gravada de minuto em
+    // minuto pelo system-poller de qualquer jeito.
+    if (ciclo % CICLOS_POR_LEITURA_DE_BANDA === 0) {
+      try {
+        const counters = await mikrotik.getPppoeInterfaceCounters();
+        updateBandwidth(counters);
+      } catch (bwErr) {
+        console.error('[poller] erro ao ler contadores de banda:', bwErr?.message || bwErr);
+      }
     }
 
     try {
