@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, radius } from '../theme';
@@ -142,6 +142,9 @@ export default function NotificationsScreen() {
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(emptyMeta);
   const [page, setPage] = useState(1);
+  // Chaves de cache que ja receberam dado fresco. Ver o comentario no
+  // callback do withCache.
+  const chavesCarregadas = useRef(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [staleAt, setStaleAt] = useState(null);
@@ -160,17 +163,25 @@ export default function NotificationsScreen() {
       };
       // O 3o argumento roda com o que ja esta guardado, antes da rede
       // responder: a tela aparece preenchida na hora.
+      const chaveCache = `notifications:${page}`;
       const { data: res, stale, savedAt } = await withCache(
-        `notifications:${page}`,
+        chaveCache,
         () => api.notifications({ page, pageSize: PAGE_SIZE }),
-        (guardado, salvoEm) => {
-          aplicar(guardado);
-          setStaleAt(salvoEm);
-          setLoading(false);
-        }
+        // Mostra o guardado antes da rede responder so quando a tela ainda nao
+        // tem o dado DESTA chave: primeira carga, ou o usuario trocou de pagina,
+        // busca ou filtro. Numa atualizacao da mesma chave isso fazia o aviso de
+        // "desatualizado" entrar e sair a cada ciclo, e a tela tremia.
+        chavesCarregadas.current.has(chaveCache)
+          ? null
+          : (guardado, salvoEm) => {
+              aplicar(guardado);
+              setStaleAt(salvoEm);
+              setLoading(false);
+            }
       );
       setStaleAt(stale ? savedAt : null);
       aplicar(res);
+      chavesCarregadas.current.add(chaveCache);
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar notificações');

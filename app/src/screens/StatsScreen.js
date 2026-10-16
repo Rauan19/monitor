@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { colors, radius } from '../theme';
@@ -32,6 +32,9 @@ export default function StatsScreen() {
 
   const [error, setError] = useState('');
   const [staleAt, setStaleAt] = useState(null);
+  // Chaves de cache que ja receberam dado fresco. Ver o comentario no
+  // callback do withCache.
+  const chavesCarregadas = useRef(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -52,8 +55,9 @@ export default function StatsScreen() {
         setSlaByPort(slaPortRes.items || []);
       };
 
+      const chaveCache = `stats:${topLimit}:${slaQuery}:${slaPage}:${queueUsagePage}`;
       const { data: pacote, stale, savedAt } = await withCache(
-        `stats:${topLimit}:${slaQuery}:${slaPage}:${queueUsagePage}`,
+        chaveCache,
         async () => {
           const [tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes] = await Promise.all([
             api.topConsumers(24, topLimit),
@@ -65,14 +69,20 @@ export default function StatsScreen() {
           ]);
           return { tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes };
         },
-        (guardado, salvoEm) => {
-          aplicar(guardado);
-          setStaleAt(salvoEm);
-          setLoading(false);
-        }
+        // Mostra o guardado antes da rede responder so quando a tela ainda nao
+        // tem o dado DESTA chave: primeira carga, ou o usuario trocou de pagina,
+        // busca ou filtro. Numa atualizacao da mesma chave isso fazia o aviso de
+        // "desatualizado" entrar e sair a cada ciclo, e a tela tremia.
+        chavesCarregadas.current.has(chaveCache)
+          ? null
+          : (guardado, salvoEm) => {
+              aplicar(guardado);
+              setStaleAt(salvoEm);
+            }
       );
       setStaleAt(stale ? savedAt : null);
       aplicar(pacote);
+      chavesCarregadas.current.add(chaveCache);
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar estatísticas');

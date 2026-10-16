@@ -145,6 +145,8 @@ export default function MapScreen() {
   const [pontos, setPontos] = useState([]);
   const [busca, setBusca] = useState('');
   const [filtro, setFiltro] = useState('todos');
+  // A tela ja tem o que mostrar? Ver o comentario no callback do withCache.
+  const temConteudo = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [staleAt, setStaleAt] = useState(null);
@@ -164,14 +166,20 @@ export default function MapScreen() {
           const [mapa, olts] = await Promise.all([api.mapPoints(), api.listOlts()]);
           return { items: mapa.items, olts: olts.olts };
         },
-        (guardado, salvoEm) => {
-          aplicar(guardado);
-          setStaleAt(salvoEm);
-          setLoading(false);
-        }
+        // Mostra o guardado antes da rede responder so na primeira carga. Nas
+        // atualizacoes de fundo isso fazia o aviso de "desatualizado" entrar e
+        // sair a cada ciclo, e a tela tremia.
+        temConteudo.current
+          ? null
+          : (guardado, salvoEm) => {
+              aplicar(guardado);
+              setStaleAt(salvoEm);
+              setLoading(false);
+            }
       );
       setStaleAt(stale ? savedAt : null);
       aplicar(data);
+      temConteudo.current = true;
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar o mapa');

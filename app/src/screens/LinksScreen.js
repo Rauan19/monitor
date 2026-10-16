@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { Alert, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -65,6 +65,8 @@ export default function LinksScreen() {
   const [eventos, setEventos] = useState([]);
   const [disponiveis, setDisponiveis] = useState(null);
   const [novoLabel, setNovoLabel] = useState({});
+  // A tela ja tem o que mostrar? Ver o comentario no callback do withCache.
+  const temConteudo = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [staleAt, setStaleAt] = useState(null);
@@ -85,14 +87,20 @@ export default function LinksScreen() {
           ]);
           return { links: st.items, eventos: ev.items };
         },
-        (guardado, salvoEm) => {
-          aplicar(guardado);
-          setStaleAt(salvoEm);
-          setLoading(false);
-        }
+        // Mostra o guardado antes da rede responder so na primeira carga. Nas
+        // atualizacoes de fundo isso fazia o aviso de "desatualizado" entrar e
+        // sair a cada ciclo, e a tela tremia.
+        temConteudo.current
+          ? null
+          : (guardado, salvoEm) => {
+              aplicar(guardado);
+              setStaleAt(salvoEm);
+              setLoading(false);
+            }
       );
       setStaleAt(stale ? savedAt : null);
       aplicar(data);
+      temConteudo.current = true;
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar os links');

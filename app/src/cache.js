@@ -53,6 +53,13 @@ export async function withCache(key, fetcher, aoReceberCache) {
   //
   // Padrao "mostra o que tem, atualiza quando chegar": o usuario ve a tela
   // preenchida na hora e ela se corrige sozinha quando a resposta chega.
+  //
+  // Isso vale SO quando a tela ainda nao tem o que mostrar. As telas se
+  // atualizam a cada 10s, e quando `aoReceberCache` rodava nessas atualizacoes
+  // tambem, o resultado era a tela tremendo: o callback marcava o dado como
+  // desatualizado, o aviso aparecia, a resposta chegava uns instantes depois e
+  // ele sumia, empurrando o conteudo pra cima e pra baixo duas vezes a cada
+  // ciclo. Por isso quem chama passa `null` aqui depois da primeira carga.
   if (aoReceberCache) {
     const guardado = await readCache(key);
     if (guardado) aoReceberCache(guardado.data, guardado.savedAt);

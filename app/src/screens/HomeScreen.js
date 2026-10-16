@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -119,6 +119,10 @@ export default function HomeScreen() {
   const { width } = useWindowDimensions();
 
   const [dados, setDados] = useState(null);
+  // A tela ja tem o que mostrar? Decide se vale piscar o dado guardado antes da
+  // rede responder. Na primeira carga vale; nas atualizacoes de 10s, nao, senao
+  // o aviso de "desatualizado" entra e sai e a tela fica tremendo.
+  const temConteudo = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [staleAt, setStaleAt] = useState(null);
@@ -134,15 +138,18 @@ export default function HomeScreen() {
           return { dash, status };
         },
         // Mostra os numeros da ultima vez antes da rede responder, pra tela nao
-        // nascer vazia quando a conexao esta ruim.
-        (guardado, salvoEm) => {
-          setDados((atual) => ({ ...atual, ...guardado }));
-          setStaleAt(salvoEm);
-          setLoading(false);
-        }
+        // nascer vazia quando a conexao esta ruim. So na primeira carga.
+        temConteudo.current
+          ? null
+          : (guardado, salvoEm) => {
+              setDados((atual) => ({ ...atual, ...guardado }));
+              setStaleAt(salvoEm);
+              setLoading(false);
+            }
       );
       setStaleAt(stale ? savedAt : null);
       setDados((atual) => ({ ...atual, ...data }));
+      temConteudo.current = true;
       setError('');
     } catch (err) {
       setError(err.message || 'Falha ao carregar o painel');
@@ -170,7 +177,7 @@ export default function HomeScreen() {
           ]);
           return { sys, hist, hourly, top, notifs };
         },
-        (guardado) => setDados((atual) => ({ ...atual, ...guardado }))
+        temConteudo.current ? null : (guardado) => setDados((atual) => ({ ...atual, ...guardado }))
       );
       setDados((atual) => ({ ...atual, ...data }));
     } catch {
@@ -208,10 +215,25 @@ export default function HomeScreen() {
   const larguraGrafico = Math.max(220, width - 24 /* padding da tela */ - 28 /* padding do card */);
 
   const hist = dados?.hist?.items || [];
-  const cpuSerie = reamostrar(hist, PONTOS_GRAFICO, (h) => h.cpu_load).map((value) => ({ value }));
-  const memSerie = reamostrar(hist, PONTOS_GRAFICO, (h) =>
-    h.total_memory ? ((h.total_memory - h.free_memory) / h.total_memory) * 100 : 0
-  ).map((value) => ({ value }));
+
+  // Assinatura do conteudo, nao a identidade do array.
+  //
+  // As series eram remontadas em TODO render, e o render acontece a cada 10s
+  // quando os numeros ao vivo se atualizam. O grafico do gifted-charts reanima
+  // quando a prop `data` troca de identidade, entao as duas linhas refaziam a
+  // animacao do zero a cada ciclo. Comparando o conteudo, a animacao so roda
+  // quando o historico realmente mudou (de 2 em 2 min, com o loadPesado).
+  const assinaturaHist = `${hist.length}|${hist[hist.length - 1]?.created_at || ''}`;
+  const { cpuSerie, memSerie } = useMemo(
+    () => ({
+      cpuSerie: reamostrar(hist, PONTOS_GRAFICO, (h) => h.cpu_load).map((value) => ({ value })),
+      memSerie: reamostrar(hist, PONTOS_GRAFICO, (h) =>
+        h.total_memory ? ((h.total_memory - h.free_memory) / h.total_memory) * 100 : 0
+      ).map((value) => ({ value })),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [assinaturaHist]
+  );
 
   // Teto do eixo com folga sobre o maior valor, arredondado na dezena, sempre
   // ancorado no zero. Um CCR ocioso fica em 10-20%: num eixo fixo de 0-100 as
@@ -221,18 +243,27 @@ export default function HomeScreen() {
   const escala = ESCALAS_EIXO.find((e) => maiorPct * 1.25 <= e.teto) || ESCALAS_EIXO[ESCALAS_EIXO.length - 1];
 
   const horas = dados?.hourly?.items || [];
-  const cargaValores = horas.map((h) => (h.avgDownBps || 0) + (h.avgUpBps || 0));
+  const cargaValores = useMemo(
+    () => horas.map((h) => (h.avgDownBps || 0) + (h.avgUpBps || 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [horas.length, horas[0]?.avgDownBps, horas[horas.length - 1]?.avgDownBps]
+  );
   const pico = cargaValores.length ? Math.max(...cargaValores) : 0;
   const horaPico = cargaValores.indexOf(pico);
   // Forma "enfase": a hora de pico e o ponto da tela, o resto e contexto.
   // O valor do pico vai no subtitulo em vez de flutuar sobre a barra: quando o
   // pico cai na primeira ou na ultima hora, um rotulo centrado na barra
   // estouraria a borda do grafico, e rotulo cortado e pior que rotulo nenhum.
-  const cargaBarras = horas.map((h, i) => ({
-    value: cargaValores[i],
-    label: i % 6 === 0 ? String(h.hour).padStart(2, '0') : '',
-    frontColor: i === horaPico && pico > 0 ? SERIE_CPU : DE_ENFASE,
-  }));
+  const cargaBarras = useMemo(
+    () =>
+      horas.map((h, i) => ({
+        value: cargaValores[i],
+        label: i % 6 === 0 ? String(h.hour).padStart(2, '0') : '',
+        frontColor: i === horaPico && pico > 0 ? SERIE_CPU : DE_ENFASE,
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cargaValores, horaPico, pico]
+  );
   const subCarga =
     pico > 0
       ? `Média de 7 dias · pico às ${String(horas[horaPico].hour).padStart(2, '0')}h, ${formatBps(pico)}`
