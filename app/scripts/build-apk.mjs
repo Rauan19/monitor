@@ -25,9 +25,21 @@ const KEYSTORE = path.join(RAIZ, 'monitorzcnet-release.jks');
 const SENHAS = path.join(RAIZ, 'android-signing.properties');
 const ALIAS = 'monitorzcnet';
 
-// Só o que celular usa. O padrão do template inclui x86 e x86_64, que servem
-// para emulador: compilar os quatro dobra o tempo e o tamanho do APK por nada.
-const ABIS = 'arm64-v8a,armeabi-v7a';
+// Só 64 bits ARM.
+//
+// O template vem com quatro ABIs: x86 e x86_64 servem pra emulador, e
+// armeabi-v7a pra celular de 32 bits. Cada ABI e uma compilacao C++ completa de
+// todos os modulos nativos.
+//
+// O armeabi-v7a saiu porque era ele que derrubava o build nesta maquina: o
+// clang++ morria por falta de memoria compilando o react-native-svg pra
+// armv7-none-linux-android24. Sai tambem metade do tamanho do APK.
+//
+// O custo: celular que SO tem 32 bits nao instala. Na pratica nao existe no
+// parque atual, aparelho e arm64 desde meados de 2015 e o Google Play exige 64
+// bits desde 2019. Se um dia precisar, volte 'armeabi-v7a' aqui, mas numa
+// maquina com mais RAM.
+const ABIS = 'arm64-v8a';
 
 const passo = (t) => console.log(`\n── ${t}`);
 const nota = (t) => console.log(`   ${t}`);
@@ -123,6 +135,73 @@ function garantirKeystore() {
   nota(`senha gravada em ${path.basename(SENHAS)} (nao aparece no terminal)`);
 }
 
+/** Quantos arquivos com essa extensao existem abaixo de um diretorio. */
+function contarArquivos(dir, extensao) {
+  let total = 0;
+  const visitar = (atual) => {
+    let entradas;
+    try {
+      entradas = fs.readdirSync(atual, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entradas) {
+      if (e.isDirectory()) visitar(path.join(atual, e.name));
+      else if (e.name.endsWith(extensao)) total++;
+    }
+  };
+  visitar(dir);
+  return total;
+}
+
+/**
+ * Apaga o codegen gerado dentro de node_modules.
+ *
+ * O passo generateCodegenArtifactsFromSchema escreve o arquivo e depois faz
+ * rename pro lugar final. No Windows, rename sobre arquivo que ja existe falha
+ * com EPERM quando alguem esta com ele aberto, e antivirus varrendo arquivo
+ * recem-escrito faz exatamente isso. Sem o destino antigo no caminho, o rename
+ * nao tem com o que colidir. Isso regenera em segundos.
+ */
+function limparCodegen() {
+  const mods = path.join(RAIZ, 'node_modules');
+  let apagados = 0;
+  const visitar = (dir, profundidade) => {
+    if (profundidade > 2) return;
+    let entradas;
+    try {
+      entradas = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entradas) {
+      if (!e.isDirectory()) continue;
+      const alvo = path.join(dir, e.name, 'android', 'build', 'generated', 'source', 'codegen');
+      if (fs.existsSync(alvo)) {
+        try {
+          fs.rmSync(alvo, { recursive: true, force: true });
+          apagados++;
+        } catch {
+          // travado agora: o build tenta de novo por conta
+        }
+      }
+      if (e.name.startsWith('@')) visitar(path.join(dir, e.name), profundidade + 1);
+    }
+  };
+  visitar(mods, 1);
+  if (apagados) nota(`codegen antigo apagado em ${apagados} modulo(s)`);
+}
+
+/** Grava o versionCode direto no projeto nativo, sem precisar do prebuild. */
+function gravarVersionCodeNativo(versionCode) {
+  const p = path.join(ANDROID, 'app', 'build.gradle');
+  const s = fs.readFileSync(p, 'utf8');
+  const re = /^(\s*versionCode\s+)\d+$/m;
+  if (!re.test(s)) throw new Error('build.gradle nao tem a linha de versionCode');
+  fs.writeFileSync(p, s.replace(re, `$1${versionCode}`), 'utf8');
+  nota(`versionCode ${versionCode} gravado no projeto nativo`);
+}
+
 /** Sobe o versionCode pra o APK novo instalar por cima do anterior. */
 function subirVersionCode() {
   const p = path.join(RAIZ, 'app.json');
@@ -131,7 +210,55 @@ function subirVersionCode() {
   cfg.expo.android.versionCode = atual + 1;
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
   nota(`versionCode ${atual} -> ${atual + 1} (Android recusa instalar por cima de um codigo maior)`);
-  return cfg.expo.version;
+  return { versao: cfg.expo.version, versionCode: atual + 1 };
+}
+
+/**
+ * Limita quantos clang++ rodam ao mesmo tempo na compilacao nativa.
+ *
+ * Esta era a causa real dos builds morrendo nesta maquina:
+ *
+ *   LLVM ERROR: out of memory / Allocation failed
+ *
+ * O ninja, que faz a compilacao C++ por dentro do Gradle, abre um job por
+ * nucleo. Com 12 nucleos sao 12 a 14 clang++ simultaneos, cada um querendo
+ * centenas de MB num arquivo C++20 cheio de template (rnscreens.cpp,
+ * RNSVGLayoutableShadowNode.cpp). Em ~10 GB de RAM isso nao cabe, e quem morre
+ * e o clang, nao o Gradle: por isso `org.gradle.workers.max` nao resolvia, ele
+ * so limita as tarefas do Gradle e nao alcanca o ninja.
+ *
+ * Job pool do CMake e o jeito de falar com o ninja: `compile=N` limita os
+ * jobs de compilacao, e `link=1` o de ligacao, que e o passo que pede mais
+ * memoria de uma vez. O build fica mais lento e passa a caber.
+ */
+function limitarJobsNativos(jobs) {
+  const p = path.join(ANDROID, 'app', 'build.gradle');
+  let s = fs.readFileSync(p, 'utf8');
+  if (s.includes('CMAKE_JOB_POOLS')) {
+    nota(`build.gradle ja limita os jobs nativos`);
+    return;
+  }
+
+  const alvo = `    defaultConfig {
+        applicationId '`;
+  if (!s.includes(alvo)) throw new Error('build.gradle nao tem o defaultConfig esperado');
+
+  // defaultConfig e aditivo: estes argumentos se somam aos que o plugin do
+  // React Native ja configura, nao substituem.
+  s = s.replace(
+    alvo,
+    `    defaultConfig {
+        externalNativeBuild {
+            cmake {
+                arguments "-DCMAKE_JOB_POOLS=compile=${jobs};link=1",
+                          "-DCMAKE_JOB_POOL_COMPILE=compile",
+                          "-DCMAKE_JOB_POOL_LINK=link"
+            }
+        }
+        applicationId '`
+  );
+  fs.writeFileSync(p, s, 'utf8');
+  nota(`jobs de compilacao nativa limitados a ${jobs}`);
 }
 
 /** Troca a assinatura de debug pela de release no build.gradle gerado. */
@@ -174,41 +301,116 @@ function aplicarAssinatura() {
   nota('assinatura de release aplicada no build.gradle');
 }
 
+/**
+ * Impede dois builds ao mesmo tempo.
+ *
+ * `expo prebuild` APAGA e recria a pasta android/. Se um segundo build comeca
+ * enquanto o Gradle do primeiro esta lendo dali, o prebuild falha com EBUSY e o
+ * que sobra e um projeto nativo pela metade, com o build antigo seguindo em cima
+ * de arquivos que mudaram. O erro que aparece depois nao tem relacao obvia com a
+ * causa, e isso custa tempo pra entender.
+ *
+ * O arquivo guarda o pid: se o processo que o criou nao existe mais (build
+ * morreu, maquina reiniciou), a trava e considerada orfa e liberada.
+ */
+function travar() {
+  const lock = path.join(RAIZ, 'android', '.build-apk.lock');
+  if (fs.existsSync(lock)) {
+    const pid = Number(fs.readFileSync(lock, 'utf8').trim());
+    let vivo = false;
+    try {
+      process.kill(pid, 0); // nao mata: so pergunta se existe
+      vivo = true;
+    } catch {
+      vivo = false;
+    }
+    if (vivo) {
+      console.error(
+        `\nJa tem um build rodando nesta pasta (pid ${pid}).\n\n` +
+          'Dois builds juntos se atropelam: o prebuild de um apaga a pasta android/\n' +
+          'que o Gradle do outro esta lendo. Espere o primeiro terminar.\n\n' +
+          `Se tiver certeza que nao existe mais, apague:\n  ${lock}`
+      );
+      process.exit(1);
+    }
+    nota(`trava orfa do pid ${pid} liberada`);
+  }
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, String(process.pid), 'utf8');
+  const soltar = () => {
+    try {
+      fs.unlinkSync(lock);
+    } catch {
+      // ja foi
+    }
+  };
+  process.on('exit', soltar);
+  process.on('SIGINT', () => {
+    soltar();
+    process.exit(130);
+  });
+}
+
 function main() {
   const sdk = acharSdk();
   passo('Ambiente');
   nota(`Android SDK: ${sdk}`);
+  travar();
 
   passo('Keystore');
   garantirKeystore();
 
   passo('Versao');
-  const versao = subirVersionCode();
+  const { versao, versionCode } = subirVersionCode();
 
-  // Antes do prebuild: ele gera android/ a partir do app.json, incluindo o
-  // versionCode novo.
-  passo('Gerando o projeto nativo (expo prebuild)');
-  // O prebuild reescreve os scripts do package.json pra `expo run:android`, que
-  // compila um build nativo em vez de abrir o Expo Go. O desenvolvimento aqui e
-  // no Expo Go, entao guardamos os scripts e devolvemos depois: gerar APK nao
-  // deveria mexer em como se roda o app em dev.
-  const pkgPath = path.join(RAIZ, 'package.json');
-  const scriptsAntes = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).scripts;
+  // Prebuild SO quando precisa.
+  //
+  // `expo prebuild` apaga e recria android/ inteira, e junto vai
+  // android/app/build e android/app/.cxx: toda a compilacao C++ ja feita. Numa
+  // maquina onde o build nativo e a parte demorada e a que mais arrisca estourar
+  // a memoria, rodar prebuild em toda tentativa significa refazer do zero a cada
+  // vez, e foi isso que fez varias tentativas baterem na mesma parede.
+  //
+  // Entao: se android/ ja existe, o projeto nativo e reaproveitado e o
+  // versionCode e gravado direto nele. Passe --prebuild pra forcar a
+  // regeneracao, que e o que se faz depois de mexer no app.json, nos plugins ou
+  // nas dependencias nativas.
+  const forcarPrebuild = process.argv.includes('--prebuild');
+  const temNativo = fs.existsSync(path.join(ANDROID, 'app', 'build.gradle'));
 
-  // Chama o CLI do Expo pelo node, direto: evita depender do npx e do shell.
-  rodar('node', [
-    path.join(RAIZ, 'node_modules', 'expo', 'bin', 'cli'),
-    'prebuild', '--platform', 'android', '--no-install',
-  ]);
+  if (forcarPrebuild || !temNativo) {
+    passo('Gerando o projeto nativo (expo prebuild)');
+    if (temNativo) nota('--prebuild: a compilacao nativa anterior sera descartada');
 
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-  if (JSON.stringify(pkg.scripts) !== JSON.stringify(scriptsAntes)) {
-    pkg.scripts = scriptsAntes;
-    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
-    nota('scripts do package.json devolvidos (o prebuild tinha trocado)');
+    // O prebuild reescreve os scripts do package.json pra `expo run:android`,
+    // que compila um build nativo em vez de abrir o Expo Go. O desenvolvimento
+    // aqui e no Expo Go, entao guardamos os scripts e devolvemos depois: gerar
+    // APK nao deveria mexer em como se roda o app em dev.
+    const pkgPath = path.join(RAIZ, 'package.json');
+    const scriptsAntes = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).scripts;
+
+    // Chama o CLI do Expo pelo node, direto: evita depender do npx e do shell.
+    rodar('node', [
+      path.join(RAIZ, 'node_modules', 'expo', 'bin', 'cli'),
+      'prebuild', '--platform', 'android', '--no-install',
+    ]);
+
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (JSON.stringify(pkg.scripts) !== JSON.stringify(scriptsAntes)) {
+      pkg.scripts = scriptsAntes;
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+      nota('scripts do package.json devolvidos (o prebuild tinha trocado)');
+    }
+  } else {
+    passo('Projeto nativo');
+    const sos = contarArquivos(path.join(ANDROID, 'app', 'build'), '.so');
+    nota(`reaproveitando android/ (${sos} bibliotecas nativas ja compiladas)`);
+    nota('use --prebuild depois de mexer no app.json, plugins ou libs nativas');
+    gravarVersionCodeNativo(versionCode);
   }
 
   passo('Ajustes no projeto gerado');
+  limparCodegen();
   fs.writeFileSync(
     path.join(ANDROID, 'local.properties'),
     `sdk.dir=${sdk.replace(/\\/g, '\\\\')}\n`,
@@ -217,20 +419,76 @@ function main() {
   nota('local.properties apontando pro SDK');
 
   const gp = path.join(ANDROID, 'gradle.properties');
-  const antes = fs.readFileSync(gp, 'utf8');
-  fs.writeFileSync(gp, antes.replace(/^reactNativeArchitectures=.*$/m, `reactNativeArchitectures=${ABIS}`), 'utf8');
+  let props = fs.readFileSync(gp, 'utf8');
+  props = props.replace(/^reactNativeArchitectures=.*$/m, `reactNativeArchitectures=${ABIS}`);
   nota(`ABIs: ${ABIS}`);
+
+  // Memoria. Esta maquina tem ~10 GB, e o padrao do template foi feito pra
+  // maquina de build folgada: o build morreu com "insufficient memory for the
+  // Java Runtime Environment", num malloc nativo dentro do R8 (a fase de dex, a
+  // mais faminta). O que estourava:
+  //
+  // - org.gradle.parallel=true sem limite de workers: com 12 nucleos o Gradle
+  //   abre worker por nucleo, cada um alocando nativo por fora do heap.
+  // - o compilador Kotlin roda numa SEGUNDA JVM por padrao, com heap propria
+  //   somada a do daemon do Gradle.
+  //
+  // Entao: uma JVM so, poucos workers, e heap um pouco maior porque agora o
+  // Kotlin divide ela. Serial GC porque o G1 mantem estruturas e threads por
+  // nucleo, e aqui o gargalo e memoria, nao tempo de GC.
+  // Sobre o -Xmx: subir nao ajuda aqui, atrapalha. Com 3 GB a JVM morreu num
+  // malloc NATIVO e o proprio crash dizia "Decrease Java heap size": o heap
+  // reservado sufoca a memoria nativa da mesma JVM, que e de onde sai o
+  // trabalho do R8 e do compilador. 2 GB e o valor do template, e e o que
+  // completou build nesta maquina.
+  const MEMORIA = {
+    'org.gradle.jvmargs': '-Xmx2048m -XX:MaxMetaspaceSize=512m -XX:+UseSerialGC -Dfile.encoding=UTF-8',
+    'org.gradle.parallel': 'false',
+    'org.gradle.workers.max': '2',
+    'kotlin.compiler.execution.strategy': 'in-process',
+  };
+  for (const [chave, valor] of Object.entries(MEMORIA)) {
+    const linha = `${chave}=${valor}`;
+    const re = new RegExp(`^${chave.replace(/\./g, '\\.')}=.*$`, 'm');
+    props = re.test(props) ? props.replace(re, linha) : `${props.trimEnd()}\n${linha}\n`;
+  }
+  fs.writeFileSync(gp, props, 'utf8');
+  nota('memoria: 1 JVM, heap 3 GB, 2 workers');
 
   aplicarAssinatura();
 
-  passo('Compilando (a primeira vez baixa o Gradle, demora)');
+  // Um clang++ nestes arquivos chega a pedir ~1,5 GB. O numero sai da memoria
+  // livre, nao do numero de nucleos, porque aqui o limite e memoria.
+  const jobs = Math.max(1, Math.min(4, Math.floor(os.freemem() / 1024 ** 3 / 1.5)));
+  limitarJobsNativos(jobs);
+
   // Caminho absoluto: com shell no Windows, o nome solto nem sempre e resolvido
   // a partir do cwd.
   const gradlew = path.join(ANDROID, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew');
-  rodarScript(gradlew, ['app:assembleRelease'], {
-    cwd: ANDROID,
-    env: { ...process.env, ANDROID_HOME: sdk, ANDROID_SDK_ROOT: sdk },
-  });
+  const ambiente = { ...process.env, ANDROID_HOME: sdk, ANDROID_SDK_ROOT: sdk };
+
+  // Derruba daemon antigo antes de compilar. Dois motivos: ele segue residente
+  // entre builds segurando GBs, e um daemon iniciado com os jvmargs de antes
+  // nao pega os valores novos (o Gradio sobe outro e o velho fica ocupando
+  // memoria do mesmo jeito). O cache de compilacao fica em ~/.gradle e nao se
+  // perde nisso, so o tempo de subir a JVM.
+  passo('Liberando memoria');
+  try {
+    rodarScript(gradlew, ['--stop'], { cwd: ANDROID, env: ambiente, stdio: 'ignore' });
+    nota('daemons antigos do Gradle encerrados');
+  } catch {
+    nota('nenhum daemon pra encerrar');
+  }
+
+  const livreGb = os.freemem() / 1024 ** 3;
+  nota(`memoria livre agora: ${livreGb.toFixed(1)} GB`);
+  if (livreGb < 3) {
+    nota('ATENCAO: abaixo de 3 GB o build pode morrer. Feche navegador e o que');
+    nota('estiver pesado, ou rode de novo depois.');
+  }
+
+  passo('Compilando (a primeira vez baixa o Gradle, demora)');
+  rodarScript(gradlew, ['app:assembleRelease'], { cwd: ANDROID, env: ambiente });
 
   const gerado = path.join(ANDROID, 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
   const destino = path.join(RAIZ, 'build', `MonitorZcnet-${versao}.apk`);
