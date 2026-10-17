@@ -12,7 +12,7 @@
     "android": {
       "package": "com.zcnet.monitorzcnet",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 11,
+      "versionCode": 12,
       "permissions": [
         "android.permission.POST_NOTIFICATIONS"
       ],
