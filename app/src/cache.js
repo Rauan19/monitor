@@ -55,9 +55,23 @@ export async function writeCache(key, data) {
   }
 }
 
+// Quantas falhas SEGUIDAS ate avisar "sem conexao com o servidor".
+//
+// O aviso aparecia na primeira requisicao que falhasse. Medindo o servidor de
+// producao em 70 chamadas seguidas na rota /api/health, que so devolve
+// {ok:true}, cerca de uma em cada dez falha ou passa de 5s. Com as telas
+// recarregando a cada 10s, isso fazia o aviso piscar o tempo todo: aparecia num
+// ciclo, sumia no seguinte, e o conteudo pulava junto.
+//
+// Uma falha isolada nao e queda de conexao, e um tropeco. Com duas seguidas o
+// aviso so aparece depois de uns 20s sem resposta, que ai e de verdade. Enquanto
+// isso a tela continua mostrando o que tem, sem alarme.
+const FALHAS_PRA_AVISAR = 2;
+const falhasSeguidas = new Map();
+
 /**
  * Busca na rede e cacheia. Se a rede falhar e houver cache, devolve o cache
- * marcado como `stale` em vez de propagar o erro.
+ * em vez de propagar o erro, marcando `stale` so depois de falhas seguidas.
  *
  * Devolve { data, stale, savedAt }. Se falhar e nao houver cache, lanca o erro
  * original, pra tela mostrar o banner de erro como antes.
@@ -86,10 +100,21 @@ export async function withCache(key, fetcher, aoReceberCache) {
   try {
     const data = await fetcher();
     writeCache(key, data); // sem await: nao atrasa a tela
+    falhasSeguidas.delete(key);
     return { data, stale: false, savedAt: null };
   } catch (err) {
+    const falhas = (falhasSeguidas.get(key) || 0) + 1;
+    falhasSeguidas.set(key, falhas);
+
     const cached = await readCache(key);
-    if (cached) return { data: cached.data, stale: true, savedAt: cached.savedAt };
+    if (cached) {
+      return {
+        data: cached.data,
+        // Uma falha sozinha nao vira aviso: a tela segue mostrando o que tem.
+        stale: falhas >= FALHAS_PRA_AVISAR,
+        savedAt: cached.savedAt,
+      };
+    }
     throw err;
   }
 }
