@@ -204,14 +204,6 @@ export default function HomeScreen() {
     }, [loadRapido, loadPesado])
   );
 
-  if (loading && !dados) {
-    return (
-      <View style={styles.screen}>
-        <LoadingState />
-      </View>
-    );
-  }
-
   const larguraGrafico = Math.max(220, width - 24 /* padding da tela */ - 28 /* padding do card */);
 
   const hist = dados?.hist?.items || [];
@@ -281,6 +273,25 @@ export default function HomeScreen() {
 
   const subSistema =
     memPct != null ? `Últimas 24 horas · memória agora em ${memPct}%` : 'Últimas 24 horas, em %';
+
+  // A tela de carregando sai DEPOIS de todos os hooks, nunca antes.
+  //
+  // Quando este return estava la em cima, os tres useMemo abaixo dele eram
+  // pulados enquanto `dados` era null, e passavam a rodar quando a resposta
+  // chegava. React conta os hooks por posicao, entao a contagem mudava entre um
+  // render e outro: "Rendered more hooks than during the previous render", e a
+  // tela quebrava na primeira carga.
+  //
+  // Tudo que e calculado acima tolera `dados` null (hist e horas viram [], e as
+  // contas em cima de array vazio dao 0), por isso da pra rodar os hooks sempre
+  // e so decidir aqui o que desenhar.
+  if (loading && !dados) {
+    return (
+      <View style={styles.screen}>
+        <LoadingState />
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.conteudo}>
