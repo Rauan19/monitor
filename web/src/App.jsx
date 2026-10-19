@@ -5,6 +5,7 @@ import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 import 'leaflet.markercluster';
 import { api } from './api';
+import { gravarCache, lerCache, limparCache } from './cache';
 import Login from './Login';
 import {
   disableWebPush,
@@ -476,12 +477,35 @@ export default function App() {
       pages: r.pages || 1,
     });
 
+    // So a primeira pagina sem filtro vai pro cache: e ela que o painel abre
+    // na proxima vez. Guardar busca e paginas do meio encheria o localStorage
+    // com coisa que ninguem ve de novo.
+    const primeiraPagina = !query && !portFilter && !eventType;
+    const guardar = (chave, valor) => {
+      if (primeiraPagina) gravarCache(chave, valor);
+    };
+
     // O "Carregando..." sai assim que a primeira resposta chega, nao quando
     // todas chegam.
     const pronto = () => setLoading(false);
 
-    api.dashboard().then((dash) => { setDashboard(dash); setError(''); pronto(); }).catch(tratar);
-    api.status().then(setStatus).catch(tratar);
+    api
+      .dashboard()
+      .then((dash) => {
+        setDashboard(dash);
+        gravarCache('dashboard', dash);
+        setError('');
+        pronto();
+      })
+      .catch(tratar);
+
+    api
+      .status()
+      .then((st) => {
+        setStatus(st);
+        gravarCache('status', st);
+      })
+      .catch(tratar);
 
     api
       .portCalibrationStatus()
@@ -496,6 +520,7 @@ export default function App() {
       .then((all) => {
         setAllRows(all.items || []);
         setAllMeta(meta(all));
+        guardar('all', all);
         if (all.page && all.page !== pageAll) setPageAll(all.page);
         pronto();
       })
@@ -506,6 +531,7 @@ export default function App() {
       .then((on) => {
         setOnline(on.items || []);
         setOnlineMeta(meta(on));
+        guardar('online', on);
         if (on.page && on.page !== pageOnline) setPageOnline(on.page);
         pronto();
       })
@@ -516,6 +542,7 @@ export default function App() {
       .then((off) => {
         setDisconnected(off.items || []);
         setDisconnectedMeta(meta(off));
+        guardar('disconnected', off);
         if (off.page && off.page !== pageDisconnected) setPageDisconnected(off.page);
         pronto();
       })
@@ -526,11 +553,47 @@ export default function App() {
       .then((ev) => {
         setEvents(ev.items || []);
         setEventsMeta(meta(ev));
+        guardar('events', ev);
         if (ev.page && ev.page !== pageHistory) setPageHistory(ev.page);
         pronto();
       })
       .catch(tratar);
   }
+
+  // Pinta o painel com o que se sabia da ultima vez, ANTES de falar com a rede.
+  //
+  // Roda uma vez, assim que se sabe que ha sessao. Sem isso o painel abria em
+  // "Carregando..." toda vez: o banco responde em menos de 1ms, mas a viagem
+  // ate o servidor e o download do bundle acontecem antes de qualquer numero
+  // aparecer. Com o guardado a tela ja nasce preenchida e se corrige sozinha
+  // quando a resposta chega, uns instantes depois.
+  const pintouDoCache = useRef(false);
+  useEffect(() => {
+    if (!user || pintouDoCache.current) return;
+    pintouDoCache.current = true;
+
+    const dash = lerCache('dashboard');
+    const st = lerCache('status');
+    const all = lerCache('all');
+    const on = lerCache('online');
+    const off = lerCache('disconnected');
+    const ev = lerCache('events');
+    if (!dash && !all && !on && !off && !ev) return;
+
+    const meta = (r) => ({
+      page: r.page || 1,
+      pageSize: r.pageSize || PAGE_SIZE,
+      total: r.total || 0,
+      pages: r.pages || 1,
+    });
+    if (dash) setDashboard(dash);
+    if (st) setStatus(st);
+    if (all) { setAllRows(all.items || []); setAllMeta(meta(all)); }
+    if (on) { setOnline(on.items || []); setOnlineMeta(meta(on)); }
+    if (off) { setDisconnected(off.items || []); setDisconnectedMeta(meta(off)); }
+    if (ev) { setEvents(ev.items || []); setEventsMeta(meta(ev)); }
+    setLoading(false);
+  }, [user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -895,6 +958,10 @@ export default function App() {
     } catch {
       // segue mesmo se der erro
     }
+    // Sai junto o que estava guardado pra abertura rapida: sao nomes, IPs e MACs
+    // de clientes do provedor, e nao devem ficar no navegador depois que alguem
+    // sai da conta, ainda mais se a maquina e compartilhada no balcao.
+    limparCache();
     setUser(null);
   }
 
