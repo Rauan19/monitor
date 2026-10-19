@@ -1701,27 +1701,55 @@ export function limparHistorico({ escopos = [], olderThanDays = 0 } = {}) {
   return removidos;
 }
 
+// Acima de quantos MB de WAL vale a pena truncar. O checkpoint TRUNCATE copia o
+// WAL inteiro pro banco e zera o arquivo: num WAL pequeno custa quase nada, num
+// WAL grande custa segundos, e em better-sqlite3 esses segundos travam o
+// processo inteiro, porque as consultas sao sincronas.
+const WAL_LIMITE_MB = Number(process.env.WAL_CHECKPOINT_MB || 64);
+
+/**
+ * Limpeza de retencao. CARA: nao chame de minuto em minuto.
+ *
+ * Esta funcao ja rodou a cada ciclo do system-poller (60s) e foi a causa de a
+ * rota /api/health, que so devolve {ok:true}, chegar a 18 SEGUNDOS: o
+ * wal_checkpoint(TRUNCATE) reescrevia o WAL a cada minuto e, com better-sqlite3
+ * sendo sincrono, segurava o event loop. O app do celular via isso como "sem
+ * conexao com o servidor" e caia pro cache.
+ *
+ * Pior: o clear() do cache de agregacao no fim desfazia, todo minuto, a
+ * memoizacao de 2 min que existe justamente pra nao recalcular hourlyLoad e o
+ * baseline de banda. As duas "otimizacoes" se anulavam.
+ */
 export function pruneOldData(days = 30) {
   const database = getDb();
   const cutoff = daysAgoIso(days);
-  database.prepare(`DELETE FROM system_stats WHERE created_at < ?`).run(cutoff);
-  database.prepare(`DELETE FROM bandwidth_samples WHERE created_at < ?`).run(cutoff);
-  database.prepare(`DELETE FROM log_events WHERE fetched_at < ?`).run(cutoff);
-  database.prepare(`DELETE FROM link_events WHERE created_at < ?`).run(cutoff);
 
-  // O checkpoint automático do SQLite não dá conta quando o servidor fica meses
-  // no ar gravando sem parar: o -wal cresce indefinidamente (já chegou a 158 MB
-  // aqui). TRUNCATE devolve o WAL pro tamanho zero. Se houver leitura em
-  // andamento o SQLite responde "busy" e simplesmente tenta de novo no próximo
-  // ciclo, então não precisa tratar erro.
+  let apagadas = 0;
+  apagadas += database.prepare(`DELETE FROM system_stats WHERE created_at < ?`).run(cutoff).changes;
+  apagadas += database.prepare(`DELETE FROM bandwidth_samples WHERE created_at < ?`).run(cutoff).changes;
+  apagadas += database.prepare(`DELETE FROM log_events WHERE fetched_at < ?`).run(cutoff).changes;
+  apagadas += database.prepare(`DELETE FROM link_events WHERE created_at < ?`).run(cutoff).changes;
+
+  // Checkpoint so quando o WAL realmente cresceu. O checkpoint automatico do
+  // SQLite da conta do dia a dia; o TRUNCATE existe pro caso do servidor ficar
+  // meses no ar gravando sem parar, que foi quando o -wal chegou a 158 MB aqui.
   try {
-    database.pragma('wal_checkpoint(TRUNCATE)');
+    const wal = `${config.dbPath}-wal`;
+    const mb = fs.existsSync(wal) ? fs.statSync(wal).size / 1024 / 1024 : 0;
+    if (mb >= WAL_LIMITE_MB) {
+      const inicio = Date.now();
+      database.pragma('wal_checkpoint(TRUNCATE)');
+      console.log(`[db] WAL estava em ${mb.toFixed(0)} MB, truncado em ${Date.now() - inicio}ms`);
+    }
   } catch {
     // sem problema, tenta de novo na próxima limpeza
   }
 
-  // A limpeza mexeu no historico, entao o que estava memoizado ficou velho.
-  cacheAgregacao.clear();
+  // So invalida o memoizado se alguma coisa foi mesmo apagada. Na maioria das
+  // limpezas nada vence a retencao, e jogar fora o cache a toa fazia o
+  // hourlyLoad (440 mil linhas num B-tree temporario) ser refeito do zero.
+  if (apagadas) cacheAgregacao.clear();
+  return apagadas;
 }
 
 export function getDashboardStats() {

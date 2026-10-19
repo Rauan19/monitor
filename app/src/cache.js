@@ -15,12 +15,30 @@ const PREFIX = 'monitorzcnet:cache:';
 // porque encher o storage atrapalharia o resto do app.
 const MAX_BYTES = 256 * 1024;
 
+// Depois disso o guardado nao serve mais pra nada.
+//
+// O cache nao tinha validade, e aparecia na tela "Sem conexao com o servidor,
+// mostrando dados de 32 dias atras". Quem esta online AGORA, ha 32 dias, e
+// informacao inventada: a tela parecia cheia e estava mentindo. Vencido, vale
+// mais mostrar o erro de conexao e a tela vazia, que pelo menos sao verdade.
+//
+// 12 horas cobre o caso que o cache existe pra resolver (abrir o app numa area
+// sem sinal, servidor fora do ar por um tempo) sem chegar perto de um dado que
+// nao descreve mais a rede.
+const VALIDADE_MS = Number(12 * 60 * 60 * 1000);
+
 export async function readCache(key) {
   try {
     const raw = await AsyncStorage.getItem(PREFIX + key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed.savedAt !== 'number') return null;
+    if (Date.now() - parsed.savedAt > VALIDADE_MS) {
+      // Apaga em vez de so ignorar: senao fica ocupando o storage do aparelho
+      // pra sempre, e o storage do Android e limitado.
+      AsyncStorage.removeItem(PREFIX + key).catch(() => {});
+      return null;
+    }
     return parsed; // { data, savedAt }
   } catch {
     return null;
