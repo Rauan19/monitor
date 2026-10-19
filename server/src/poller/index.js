@@ -3,6 +3,7 @@ import { mikrotik } from '../mikrotik/client.js';
 import {
   contarQuedaAtual,
   getOlt,
+  getPollStatus,
   getRecentDisconnectGroups,
   listPortLabels,
   updatePollStatus,
@@ -22,6 +23,11 @@ let wasConnected = null; // null = ainda não sabemos
 // conexao. Um erro isolado (comando lento, CCR ocupado) nao justifica: a
 // reconexao custa um login novo e nao conserta nada.
 const FALHAS_ATE_RECONECTAR = 3;
+
+// Quantos ciclos seguidos sem leitura ate dizer que o CCR esta fora. Com o
+// poller a cada 10s, tres falhas sao uns 30s sem nenhuma resposta. Abaixo disso
+// e ciclo ruim, que numa rede com mil sessoes PPPoE acontece o tempo todo.
+const FALHAS_ATE_MARCAR_QUEDA = 3;
 let falhasSeguidas = 0;
 
 // De quantos em quantos ciclos ler os contadores de banda. Com o poller a cada
@@ -233,20 +239,39 @@ async function tick() {
   } catch (err) {
     const message = err?.message || String(err);
     console.error('[poller] erro:', message);
+
+    falhasSeguidas += 1;
+
+    // "CCR sem resposta" so depois de falhas SEGUIDAS.
+    //
+    // Este catch pega qualquer leitura que estourou o timeout, e numa rede com
+    // mil sessoes PPPoE isso acontece direto por ciclo ruim, nao por queda: o
+    // comentario do push removido logo abaixo ja dizia isso. Mas o status
+    // continuava virando "desconectado" na PRIMEIRA falha, entao o painel e o
+    // app mostravam o CCR caindo o tempo todo com o CCR de pe. Um ciclo ruim nao
+    // e queda; tres seguidos (uns 30s sem leitura nenhuma) ja e.
+    //
+    // onlineCount so e zerado quando a queda se confirma. Zerar na primeira
+    // falha fazia o painel piscar "0 online" e voltar pra mil no ciclo seguinte.
+    const quedaConfirmada = falhasSeguidas >= FALHAS_ATE_MARCAR_QUEDA;
+    const statusAtual = getPollStatus();
     updatePollStatus({
-      connected: false,
-      onlineCount: 0,
+      connected: !quedaConfirmada && statusAtual?.connected === 1,
+      onlineCount: quedaConfirmada ? 0 : statusAtual?.online_count ?? 0,
       error: message,
     });
-    // Nao existe mais push de "CCR fora do ar". Qualquer leitura lenta que
-    // estoura o timeout cai aqui, e numa rede com mil sessoes PPPoE isso
-    // acontece direto: o aviso disparava a toda hora por conta de ciclo ruim,
-    // nao de queda. A queda real continua no status do painel, no historico e
-    // no webhook, que e onde ela serve pra alguma coisa.
-    if (wasConnected !== false) {
-      notifyWebhook({ type: 'ccr_down', host: config.mikrotik.host, error: message });
+    if (!quedaConfirmada) {
+      console.error(
+        `[poller] falha ${falhasSeguidas}/${FALHAS_ATE_MARCAR_QUEDA}, ainda nao marcando o CCR como fora`
+      );
     }
-    wasConnected = false;
+
+    // Nao existe mais push de "CCR fora do ar". O webhook, que resta, so dispara
+    // com a queda confirmada, pelo mesmo motivo: ciclo ruim nao e queda.
+    if (quedaConfirmada && wasConnected !== false) {
+      notifyWebhook({ type: 'ccr_down', host: config.mikrotik.host, error: message });
+      wasConnected = false;
+    }
 
     // Antes, QUALQUER erro derrubava a conexao. Um comando lento que estourava
     // o timeout fazia o monitor deslogar e logar de novo no CCR a cada ciclo
@@ -258,10 +283,13 @@ async function tick() {
     // quando varios ciclos seguidos falham, que e o sinal de conexao
     // meio-aberta: o servidor escreve, o CCR nunca responde, e sem isso ficaria
     // preso nesse estado.
-    falhasSeguidas += 1;
-    if (falhasSeguidas >= FALHAS_ATE_RECONECTAR) {
+    //
+    // Usa resto da divisao em vez de zerar o contador: zerando, a conta de
+    // falhas seguidas reiniciava a cada reconexao e o CCR nunca chegava a ser
+    // marcado como fora, por mais tempo que ficasse sem responder. Assim ele
+    // tenta reconectar na falha 3, 6, 9... e a contagem segue de pe.
+    if (falhasSeguidas % FALHAS_ATE_RECONECTAR === 0) {
       console.error(`[poller] ${falhasSeguidas} falhas seguidas, reconectando no CCR`);
-      falhasSeguidas = 0;
       try {
         await mikrotik.disconnect();
       } catch {
@@ -271,6 +299,15 @@ async function tick() {
   } finally {
     running = false;
   }
+}
+
+/**
+ * Um ciclo do poller, pros testes. A regra de "quantas falhas ate dizer que o
+ * CCR esta fora" so da pra verificar executando ciclo a ciclo e olhando o
+ * status gravado depois de cada um.
+ */
+export async function tickParaTeste() {
+  await tick();
 }
 
 export function startPoller() {
