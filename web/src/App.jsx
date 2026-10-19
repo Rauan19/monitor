@@ -17,6 +17,43 @@ import {
 
 const PAGE_SIZE = 20;
 
+/**
+ * Tela enquanto o painel pergunta ao servidor se a sessao ainda vale.
+ *
+ * Aqui ficava `<div className="login-shell" />`, uma div vazia: tela branca do
+ * momento em que o JS carrega ate /api/me responder. Com o servidor demorando,
+ * isso parecia painel quebrado, e nao painel abrindo.
+ *
+ * Depois de 4s aparece uma linha dizendo que o servidor esta demorando. Nao
+ * conserta a demora, mas troca "quebrou" por "esta lento", que sao coisas
+ * diferentes pra quem espera.
+ */
+function TelaAbrindo() {
+  const [demorando, setDemorando] = useState(false);
+
+  useEffect(() => {
+    const id = setTimeout(() => setDemorando(true), 4000);
+    return () => clearTimeout(id);
+  }, []);
+
+  return (
+    <div className="login-shell">
+      <div className="abrindo">
+        <div className="login-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="7.5" fill="none" strokeWidth="1.8" />
+            <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
+          </svg>
+        </div>
+        <strong>Monitor Zcnet</strong>
+        <span className="abrindo-status" role="status">
+          {demorando ? 'O servidor está demorando pra responder…' : 'Abrindo…'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function formatDate(value) {
   if (!value) return '—';
   const d = new Date(value.endsWith('Z') || value.includes('+') ? value : `${value}Z`);
@@ -922,7 +959,7 @@ export default function App() {
   }
 
   if (!authChecked) {
-    return <div className="login-shell" />;
+    return <TelaAbrindo />;
   }
 
   if (!user) {

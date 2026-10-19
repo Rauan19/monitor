@@ -2947,3 +2947,42 @@ select {
     transition: none;
   }
 }
+
+/* Tela de abertura, enquanto /api/me nao responde. Antes era uma div vazia:
+   tela branca que parecia painel quebrado em vez de painel abrindo. */
+.abrindo {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  padding: 24px;
+}
+
+.abrindo strong {
+  font-size: 1.05rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.abrindo .login-mark {
+  animation: abrindo-pulsa 1.6s ease-in-out infinite;
+}
+
+.abrindo-status {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  min-height: 1.2em;
+}
+
+@keyframes abrindo-pulsa {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.93); opacity: 0.72; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .abrindo .login-mark { animation: none; }
+}
