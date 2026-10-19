@@ -1,0 +1,53 @@
+# O que NAO sobe pro EAS Build.
+#
+# Sem este arquivo o EAS nao usa o .gitignore: ele empacota a pasta inteira e o
+# envio foi de 289 MB, com quase tudo sendo coisa que o build do app nem olha
+# (o banco SQLite de 163 MB, o node_modules do painel web, o projeto android
+# gerado localmente). O git rastreia 1,2 MB neste repositorio.
+#
+# ATENCAO: quando este arquivo existe, ele SUBSTITUI o .gitignore para o envio.
+# Por isso node_modules e companhia precisam estar listados aqui tambem, mesmo
+# ja estando no .gitignore.
+#
+# O app e autossuficiente: tem o proprio package.json e nao importa nada de
+# server/ nem de web/. Por isso os dois ficam de fora inteiros.
+
+# --- Dependencias e artefatos de build ---
+node_modules/
+**/node_modules/
+app/android/
+app/ios/
+app/build/
+app/.expo/
+app/dist/
+web/dist/
+web/node_modules/
+
+# --- Servidor e painel web: nao fazem parte do app Android ---
+server/
+web/
+
+# --- Dados e segredos ---
+# server/data ja sai junto com server/, mas fica explicito: sao centenas de MB
+# de historico de banda e log do CCR.
+server/data/
+*.db
+*.db-wal
+*.db-shm
+.env
+*.env
+**/firebase-adminsdk*.json
+**/*service-account*.json
+
+# --- Assinatura local do APK ---
+# A keystore do build local nao tem nada a ver com o build do EAS, que usa as
+# credenciais guardadas no servidor deles.
+app/monitorzcnet-release.jks
+app/android-signing.properties
+
+# --- Sobras ---
+app.bak/
+.git/
+.claude/
+*.log
+*.apk
