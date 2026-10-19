@@ -234,8 +234,27 @@ function subirVersionCode() {
 function limitarJobsNativos(jobs) {
   const p = path.join(ANDROID, 'app', 'build.gradle');
   let s = fs.readFileSync(p, 'utf8');
-  if (s.includes('CMAKE_JOB_POOLS')) {
-    nota(`build.gradle ja limita os jobs nativos`);
+
+  // Reescreve SEMPRE, nunca pula porque "ja existe".
+  //
+  // O numero de jobs sai da memoria livre no momento do build, entao envelhece:
+  // android/ e reaproveitada entre builds, e um valor escrito num dia de maquina
+  // folgada (compile=2, compile=4) continuava valendo num dia apertado. O
+  // resultado era o build morrer em LLVM ERROR: out of memory justamente quando
+  // a protecao existia pra evitar isso, e a mensagem "ja limita os jobs nativos"
+  // dava a impressao de que estava tudo certo.
+  const atual = s.match(/-DCMAKE_JOB_POOLS=compile=(\d+)/);
+  if (atual) {
+    if (Number(atual[1]) === jobs) {
+      nota(`jobs de compilacao nativa: ${jobs} (ja estava assim)`);
+      return;
+    }
+    s = s.replace(
+      /-DCMAKE_JOB_POOLS=compile=\d+;link=1/,
+      `-DCMAKE_JOB_POOLS=compile=${jobs};link=1`
+    );
+    fs.writeFileSync(p, s, 'utf8');
+    nota(`jobs de compilacao nativa: ${atual[1]} -> ${jobs} (memoria livre mudou)`);
     return;
   }
 
@@ -453,7 +472,7 @@ function main() {
     props = re.test(props) ? props.replace(re, linha) : `${props.trimEnd()}\n${linha}\n`;
   }
   fs.writeFileSync(gp, props, 'utf8');
-  nota('memoria: 1 JVM, heap 3 GB, 2 workers');
+  nota(`memoria: 1 JVM, heap ${MEMORIA['org.gradle.jvmargs'].match(/-Xmx(\S+)/)[1]}, ${MEMORIA['org.gradle.workers.max']} workers`);
 
   aplicarAssinatura();
 
