@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, radius } from '../theme';
@@ -22,7 +22,12 @@ export default function SystemScreen() {
   const [dhcp, setDhcp] = useState([]);
   const [dhcpMeta, setDhcpMeta] = useState(emptyMeta);
   const [dhcpPage, setDhcpPage] = useState(1);
+  // `dhcpQuery` e o que esta escrito na caixa; `dhcpBusca` e o que vai pra rede.
+  // Eram a mesma coisa, e estava nas dependencias do load inteiro: cada tecla
+  // refazia as oito requisicoes, interfaces e log do CCR incluidos. Digitar
+  // "joao" eram 32 chamadas ao CCR pra buscar um lease.
   const [dhcpQuery, setDhcpQuery] = useState('');
+  const [dhcpBusca, setDhcpBusca] = useState('');
 
   const [queues, setQueues] = useState([]);
   const [queuesMeta, setQueuesMeta] = useState(emptyMeta);
@@ -36,23 +41,56 @@ export default function SystemScreen() {
   const [logTopics, setLogTopics] = useState([]);
   const [logTopic, setLogTopic] = useState('');
 
-  const [error, setError] = useState('');
+  // Um erro por ciclo, nao um compartilhado: o rapido roda a cada 15s e o
+  // pesado a cada 90s, entao um setError('') do rapido apagaria a falha do
+  // pesado antes de alguem ler, e a parte que quebrou era justamente a que
+  // demora pra tentar de novo.
+  const [erroRapido, setErroRapido] = useState('');
+  const [erroPesado, setErroPesado] = useState('');
 
-  const load = useCallback(async () => {
+  // 350ms depois da ultima tecla, como na lista de clientes.
+  useEffect(() => {
+    const t = setTimeout(() => setDhcpBusca(dhcpQuery), 350);
+    return () => clearTimeout(t);
+  }, [dhcpQuery]);
+
+  useEffect(() => {
+    setDhcpPage(1);
+  }, [dhcpBusca]);
+
+  // CPU, memoria, voltagem e temperatura mudam a cada segundo: vale olhar de
+  // perto. Sao duas consultas ao historico que o servidor ja tem gravado.
+  const loadRapido = useCallback(async () => {
     try {
-      const [sys, hist, ifaces, dh, q, wl, lg, topics] = await Promise.all([
-        api.system(),
-        api.systemHistory(24),
+      const [sys, hist] = await Promise.all([api.system(), api.systemHistory(24)]);
+      setResource(sys.resource);
+      setHealth(sys.health || {});
+      setHistory(hist.items || []);
+      setErroRapido('');
+    } catch (err) {
+      setErroRapido(err.message || 'Falha ao carregar os recursos do CCR');
+    }
+  }, []);
+
+  // Estas seis vao ao CCR buscar listas grandes: sao 1081 interfaces, os leases
+  // de DHCP, as filas, o wireless e uma semana de log. Estavam no mesmo ciclo
+  // de 15s das de cima, 32 requisicoes por minuto, com a tela aberta
+  // esquecida num celular. E nada disso muda em 15 segundos: uma interface
+  // entra ou sai, um lease renova de hora em hora.
+  //
+  // Passam a cada 90s. Trocar de pagina, buscar ou filtrar topico recria este
+  // callback, entao o useFocusEffect abaixo roda de novo e busca na hora: quem
+  // esta mexendo na tela nao espera.
+  const loadPesado = useCallback(async () => {
+    try {
+      const [ifaces, dh, q, wl, lg, topics] = await Promise.all([
         api.interfaces({ page: interfacesPage, pageSize: 10 }),
-        api.dhcpLeases({ q: dhcpQuery, page: dhcpPage, pageSize: 10 }),
+        api.dhcpLeases({ q: dhcpBusca, page: dhcpPage, pageSize: 10 }),
         api.queues({ page: queuesPage, pageSize: 10 }),
         api.wireless({ page: 1, pageSize: 10 }),
         api.logs({ topic: logTopic, hours: 168, page: logsPage, pageSize: 12 }),
         api.logTopics(),
       ]);
-      setResource(sys.resource);
-      setHealth(sys.health || {});
-      setHistory(hist.items || []);
       setInterfaces(ifaces.items || []);
       setInterfacesMeta(metaOf(ifaces));
       setDhcp(dh.items || []);
@@ -63,24 +101,29 @@ export default function SystemScreen() {
       setLogs(lg.items || []);
       setLogsMeta(metaOf(lg));
       setLogTopics(topics.items || []);
-      setError('');
+      setErroPesado('');
     } catch (err) {
-      setError(err.message || 'Falha ao carregar dados do sistema');
+      setErroPesado(err.message || 'Falha ao carregar interfaces, DHCP, filas e log');
     }
-  }, [interfacesPage, dhcpPage, dhcpQuery, queuesPage, logsPage, logTopic]);
+  }, [interfacesPage, dhcpBusca, dhcpPage, queuesPage, logsPage, logTopic]);
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      load();
-      const id = setInterval(() => {
-        if (active) load();
+      loadRapido();
+      loadPesado();
+      const rapido = setInterval(() => {
+        if (active) loadRapido();
       }, 15000);
+      const pesado = setInterval(() => {
+        if (active) loadPesado();
+      }, 90000);
       return () => {
         active = false;
-        clearInterval(id);
+        clearInterval(rapido);
+        clearInterval(pesado);
       };
-    }, [load])
+    }, [loadRapido, loadPesado])
   );
 
   const cpuBars = history.map((h) => ({ value: h.cpu_load ?? 0 }));
@@ -90,7 +133,7 @@ export default function SystemScreen() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={{ padding: 12 }}>
-      <ErrorBanner message={error} />
+      <ErrorBanner message={erroRapido || erroPesado} />
 
       <Card title="Recursos do CCR">
         {resource ? (

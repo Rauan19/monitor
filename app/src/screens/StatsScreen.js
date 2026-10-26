@@ -93,9 +93,16 @@ export default function StatsScreen() {
     useCallback(() => {
       let active = true;
       load();
+      // Eram 20s, seis requisicoes por ciclo: 18 por minuto nas consultas mais
+      // caras do servidor. Mas o que elas respondem e top de consumo de 24h,
+      // SLA de 30 dias, carga por hora de 7 dias e anomalias de uma semana.
+      // Nada disso se mexe em 20 segundos, e o servidor guarda o resultado
+      // dessas agregacoes por 2 minutos (TTL_AGREGACAO_MS), entao dois tercos
+      // dessas requisicoes atravessavam a rede movel pra receber de volta a
+      // mesma resposta do cache. Agora o ciclo acompanha o cache do servidor.
       const id = setInterval(() => {
         if (active) load();
-      }, 20000);
+      }, 120000);
       return () => {
         active = false;
         clearInterval(id);

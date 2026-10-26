@@ -76,6 +76,11 @@ export default function OltsScreen() {
     }
   }, [labelOltId]);
 
+  // Booleano de proposito, nao o objeto `calibration`: ele vem novo do JSON a
+  // cada resposta, e como entra nas dependencias do useFocusEffect ele
+  // derrubaria e recriaria o intervalo em todo ciclo.
+  const calibracaoNoAr = Boolean(calibration);
+
   const loadCalibration = useCallback(async () => {
     try {
       const res = await api.portCalibrationStatus();
@@ -91,14 +96,19 @@ export default function OltsScreen() {
       let active = true;
       loadOlts();
       loadCalibration();
+      // A cada 5s so faz sentido enquanto uma calibracao esta rodando, que e
+      // quando o usuario esta de olho esperando os clientes aparecerem. Sem
+      // calibracao no ar eram 12 requisicoes por minuto pra receber
+      // `active: null` toda vez. Uma calibracao so comeca por aqui (ou pelo
+      // painel web), entao uma confirmada a cada 30s acha de sobra.
       const id = setInterval(() => {
         if (active) loadCalibration();
-      }, 5000);
+      }, calibracaoNoAr ? 5000 : 30000);
       return () => {
         active = false;
         clearInterval(id);
       };
-    }, [loadOlts, loadCalibration])
+    }, [loadOlts, loadCalibration, calibracaoNoAr])
   );
 
   useEffect(() => {
