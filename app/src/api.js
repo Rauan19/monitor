@@ -7,6 +7,39 @@ export function onSessaoInvalida(fn) {
   aoSessaoInvalida = fn;
 }
 
+// Quanto esperar por uma resposta antes de desistir.
+//
+// Nao havia limite nenhum: o padrao do Android e cerca de 60s, entao uma
+// requisicao que travasse no servidor deixava a tela esperando um minuto antes
+// de cair pro cache. Com 12s, o app desiste rapido e mostra o que tem guardado,
+// que e o comportamento util. O valor e maior que qualquer resposta normal
+// (as consultas da entrada respondem em ~150ms) e menor que a paciencia de
+// quem esta com o celular na mao.
+const TIMEOUT_MS = 12000;
+
+/**
+ * Traduz falha de rede em frase de gente.
+ *
+ * Sem isto, o erro nativo subia cru ate a tela: o usuario via
+ * "fetch failed: java.net.UnknownHostException: unable to resolve host ...".
+ * Isso acontece o tempo todo num celular em campo (troca de Wi-Fi pra dados,
+ * elevador, sinal fraco) e nao e defeito do app nem do servidor.
+ */
+function erroDeRede(err) {
+  const bruto = String(err?.message || err);
+  const e = new Error(
+    /UnknownHost|resolve host|Unable to resolve/i.test(bruto)
+      ? 'Sem internet no aparelho'
+      : /abort/i.test(bruto)
+        ? 'O servidor demorou demais pra responder'
+        : 'Não foi possível falar com o servidor'
+  );
+  e.status = 0;
+  e.deRede = true; // quem chama usa isso pra nao tratar como erro do servidor
+  e.original = bruto;
+  return e;
+}
+
 async function request(path, options = {}) {
   const base = await getServerUrl();
   if (!base) {
@@ -16,14 +49,24 @@ async function request(path, options = {}) {
   }
   const token = await getToken();
 
-  const res = await fetch(`${base}${path}`, {
-    ...options,
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  });
+  const controle = new AbortController();
+  const prazo = setTimeout(() => controle.abort(), TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${base}${path}`, {
+      ...options,
+      signal: controle.signal,
+      headers: {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+  } catch (err) {
+    throw erroDeRede(err);
+  } finally {
+    clearTimeout(prazo);
+  }
 
   // Renovacao deslizante: o servidor manda um token novo quando o atual passou
   // da metade da validade. Guardar aqui, em toda resposta, e o que faz quem usa

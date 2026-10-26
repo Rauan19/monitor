@@ -8,6 +8,8 @@ import { EmptyState, ErrorBanner, LoadingState, Pager, SearchBar, StaleBanner } 
 import { withCache } from '../cache';
 
 const PAGE_SIZE = 20;
+
+const chaveDaLinha = (item) => item.session_key;
 const emptyMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, pages: 1 };
 
 const FETCHERS = {
@@ -27,7 +29,14 @@ export default function ClientsListScreen({ mode }) {
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(emptyMeta);
   const [page, setPage] = useState(1);
+  // `query` e o que esta escrito na caixa; `buscaFirme` e o que vai pra rede.
+  //
+  // Eram a mesma coisa, e `load` depende dela: cada tecla disparava uma
+  // requisicao E derrubava/recriava o intervalo de 5s do useFocusEffect.
+  // Digitar "joaosilva" eram dez requisicoes e dez trocas de timer, num
+  // aparelho com uns 150ms de ida e volta. Era isso que travava a digitacao.
   const [query, setQuery] = useState('');
+  const [buscaFirme, setBuscaFirme] = useState('');
   // Chaves de cache que ja receberam dado fresco. Ver o comentario no
   // callback do withCache.
   const chavesCarregadas = useRef(new Set());
@@ -48,10 +57,10 @@ export default function ClientsListScreen({ mode }) {
           pages: res.pages || 1,
         });
       };
-      const chaveCache = `clients:${mode}:${query}:${page}`;
+      const chaveCache = `clients:${mode}:${buscaFirme}:${page}`;
       const { data: res, stale, savedAt } = await withCache(
         chaveCache,
-        () => FETCHERS[mode]({ q: query, page, pageSize: PAGE_SIZE }),
+        () => FETCHERS[mode]({ q: buscaFirme, page, pageSize: PAGE_SIZE }),
         // Mostra o guardado antes da rede responder so quando a tela ainda nao
         // tem o dado DESTA chave: primeira carga, ou o usuario trocou de pagina,
         // busca ou filtro. Numa atualizacao da mesma chave isso fazia o aviso de
@@ -73,11 +82,18 @@ export default function ClientsListScreen({ mode }) {
     } finally {
       setLoading(false);
     }
-  }, [mode, query, page]);
+  }, [mode, buscaFirme, page]);
+
+  // 350ms depois da ultima tecla. Curto o bastante pra parecer imediato, longo
+  // o bastante pra uma palavra inteira virar uma requisicao so.
+  useEffect(() => {
+    const t = setTimeout(() => setBuscaFirme(query), 350);
+    return () => clearTimeout(t);
+  }, [query]);
 
   useEffect(() => {
     setPage(1);
-  }, [query]);
+  }, [buscaFirme]);
 
   useEffect(() => {
     // O cadastro de OLTs muda raramente, entao busca uma vez em vez de vir
@@ -113,6 +129,19 @@ export default function ClientsListScreen({ mode }) {
 
   const copy = EMPTY_COPY[mode];
 
+  // Estaveis entre renders: com uma arrow nova a cada vez, o memo do ClientRow
+  // nao seguraria nada e as 20 linhas seriam refeitas em todo ciclo de 5s.
+  const abrirCliente = useCallback(
+    (row) => navigation.navigate('ClientDetail', { sessionKey: row.session_key }),
+    [navigation]
+  );
+  const renderItem = useCallback(
+    ({ item }) => (
+      <ClientRow oltsPorId={oltsPorId} row={item} mode={mode} onPress={abrirCliente} />
+    ),
+    [oltsPorId, mode, abrirCliente]
+  );
+
   return (
     <View style={styles.screen}>
       <SearchBar value={query} onChangeText={setQuery} placeholder="Buscar nome, IP ou MAC" />
@@ -123,10 +152,12 @@ export default function ClientsListScreen({ mode }) {
       ) : (
         <FlatList
           data={rows}
-          keyExtractor={(item) => item.session_key}
-          renderItem={({ item }) => (
-            <ClientRow oltsPorId={oltsPorId} row={item} mode={mode} onPress={() => navigation.navigate('ClientDetail', { sessionKey: item.session_key })} />
-          )}
+          keyExtractor={chaveDaLinha}
+          renderItem={renderItem}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          removeClippedSubviews
           ListEmptyComponent={<EmptyState title={copy.title} hint={copy.hint} />}
           ListFooterComponent={<Pager meta={meta} onChange={setPage} />}
         />

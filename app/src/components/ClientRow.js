@@ -1,9 +1,10 @@
+import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, radius } from '../theme';
 import { Badge } from './common';
 import { formatBps, relativeAgo, locationSummary } from '../format';
 
-export default function ClientRow({ row, mode, onPress, oltsPorId }) {
+function ClientRow({ row, mode, onPress, oltsPorId }) {
   const online = mode === 'online' ? true : Number(row.is_online) === 1;
   const loc = locationSummary(row);
   const displayName = row.alias || row.name || '—';
@@ -12,7 +13,12 @@ export default function ClientRow({ row, mode, onPress, oltsPorId }) {
   const oltNome = row.olt_id ? oltsPorId?.[Number(row.olt_id)] : null;
 
   return (
-    <Pressable style={({ pressed }) => [styles.row, pressed && styles.rowPressed, !online && styles.rowOff]} onPress={onPress}>
+    <Pressable
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed, !online && styles.rowOff]}
+      // Recebe a linha de volta pra tela poder passar um onPress estavel: com
+      // uma arrow nova por item, o memo abaixo nunca seguraria nada.
+      onPress={() => onPress(row)}
+    >
       <View style={styles.top}>
         <Badge label={online ? 'Online' : 'Offline'} tone={online ? 'ok' : 'warn'} />
         <Text style={styles.name} numberOfLines={1}>
@@ -55,6 +61,38 @@ export default function ClientRow({ row, mode, onPress, oltsPorId }) {
     </Pressable>
   );
 }
+
+/**
+ * A lista se atualiza a cada 5s e tem 20 linhas. Sem memo, as 20 eram
+ * reconstruidas em todo ciclo e tambem a cada tecla digitada na busca, mesmo
+ * quando o conteudo era identico. Num celular isso e o que se sente como app
+ * travado.
+ *
+ * A comparacao e pelos campos que a linha realmente desenha: o objeto vem novo
+ * do JSON a cada resposta, entao comparar por identidade nao seguraria nada.
+ */
+export default memo(ClientRow, (antes, depois) => {
+  if (antes.mode !== depois.mode || antes.oltsPorId !== depois.oltsPorId) return false;
+  const a = antes.row;
+  const b = depois.row;
+  return (
+    a.session_key === b.session_key &&
+    a.is_online === b.is_online &&
+    a.alias === b.alias &&
+    a.name === b.name &&
+    a.address === b.address &&
+    a.ont_port === b.ont_port &&
+    a.olt_id === b.olt_id &&
+    a.port_label === b.port_label &&
+    a.downBps === b.downBps &&
+    a.upBps === b.upBps &&
+    a.uptime === b.uptime &&
+    a.last_seen_at === b.last_seen_at &&
+    a.disconnected_at === b.disconnected_at &&
+    a.loc_neighborhood === b.loc_neighborhood &&
+    a.loc_city === b.loc_city
+  );
+});
 
 const styles = StyleSheet.create({
   row: {
