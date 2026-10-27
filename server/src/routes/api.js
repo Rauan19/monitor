@@ -286,7 +286,7 @@ apiRouter.get('/system', async (_req, res) => {
       mikrotik.getSystemResource(),
       mikrotik.getSystemHealth(),
     ]);
-    res.json({ resource, health });
+    res.json({ resource, health, diagnostico: mikrotik.diagnostico() });
   } catch (err) {
     // CCR lento ou fora do ar nao pode virar tela vazia no app.
     //

@@ -351,14 +351,46 @@ export class MikroTikClient {
    *    isso, dois aparelhos pedindo junto viram duas consultas mesmo com TTL,
    *    porque nenhuma delas terminou pra popular o cache ainda.
    */
-  async _comCache(chave, ttlMs, fn) {
+  async _comCache(chave, ttlMs, fn, maxObsoletoMs = ttlMs * 4) {
     const agora = Date.now();
     const guardado = this._cache.get(chave);
-    if (guardado && agora - guardado.em < ttlMs) return guardado.valor;
+    const idade = guardado ? agora - guardado.em : Infinity;
+
+    // Dentro do TTL: resposta na hora, sem encostar no CCR.
+    if (guardado && idade < ttlMs) return guardado.valor;
 
     const emAndamento = this._emAndamento.get(chave);
-    if (emAndamento) return emAndamento;
 
+    // Venceu o TTL mas ainda nao e velho demais: devolve o guardado AGORA e
+    // renova atras.
+    //
+    // Era aqui que o celular esperava. Vencido o TTL, a requisicao do app
+    // ficava parada esperando a ida e volta ao CCR, e o CCR nao e rapido: ele
+    // monta a tabela, serializa e manda pela API, tudo isso depois dos ~150ms
+    // de rede que o celular ja pagou. Resultado: a tela parecia travada por
+    // causa de um dado que a gente ja tinha na memoria, so com alguns segundos
+    // de idade.
+    //
+    // O CCR sai do caminho de quem esta com o celular na mao. O dado servido e
+    // no maximo `ttlMs + maxObsoletoMs` velho, e a proxima requisicao, que vem
+    // em segundos, ja pega o renovado.
+    if (guardado && idade < ttlMs + maxObsoletoMs) {
+      if (!emAndamento) {
+        // Dispara e esquece, mas sem deixar rejeicao solta: se a leitura
+        // falhar, o valor guardado continua valendo e a proxima tentativa
+        // acontece no pedido seguinte.
+        this._renovar(chave, fn).catch(() => {});
+      }
+      return guardado.valor;
+    }
+
+    // Sem nada guardado, ou velho demais pra servir: ai sim vale esperar.
+    if (emAndamento) return emAndamento;
+    return this._renovar(chave, fn);
+  }
+
+  /** Faz a leitura, guarda o resultado e desduplica quem pedir junto. */
+  _renovar(chave, fn) {
     const promessa = (async () => {
       try {
         const valor = await fn();
@@ -371,6 +403,24 @@ export class MikroTikClient {
 
     this._emAndamento.set(chave, promessa);
     return promessa;
+  }
+
+  /**
+   * Diagnostico das leituras do CCR, pra /api/system.
+   *
+   * Existe por uma pergunta que nao tinha resposta: o filtro que exclui as
+   * ~1000 interfaces PPPoE usa a negacao `?#!` da pilha de query da API, que
+   * foi deduzida das regras e nunca testada contra um CCR de verdade. Se ela
+   * nao funcionar nesta versao de RouterOS, o codigo cai calado pra ler a
+   * tabela inteira e avisa UMA vez no log, aviso que num servidor rodando ha
+   * semanas ja saiu do pm2 fazia tempo. Era um "talvez" permanente sobre a
+   * causa da lentidao.
+   */
+  diagnostico() {
+    return {
+      interfacesLidasPorVez: this._ultimasInterfacesLidas ?? null,
+      filtroDeInterfaceFuncionando: !this._avisouFiltroInterface,
+    };
   }
 
   /** Descarta o cache (usado quando a conexao com o CCR cai). */
@@ -493,6 +543,12 @@ export class MikroTikClient {
         }
         rows = await this._printRows('/interface', props);
       }
+
+      // Quantas linhas o CCR mandou de fato. Com o filtro funcionando sao umas
+      // dezenas (so os links de transporte); se cair pra tabela inteira sao
+      // mil e poucas. Exposto em /api/system pra dar pra responder "o CCR esta
+      // lento por causa disso?" olhando um numero, em vez de supondo.
+      this._ultimasInterfacesLidas = rows.length;
 
       return rows.map((r) => ({
         name: r.name || null,
