@@ -61,7 +61,12 @@ export default function ClientsScreen() {
         </View>
         <View style={styles.metric}>
           <View style={[styles.dot, { backgroundColor: connected ? colors.ok : colors.bad }]} />
-          <Text style={styles.metricLabel}>{connected ? 'API conectada' : 'API offline'}</Text>
+          {/* Dizia "API conectada" / "API offline", mas o que este campo
+              carrega e o status do CCR: o poller marca `connected` quando
+              consegue ler o roteador. Chamar de API fazia quem olha entender
+              "o sistema esta quebrado" quando a frase era "o servidor nao
+              falou com o CCR agora". */}
+          <Text style={styles.metricLabel}>{connected ? 'CCR conectado' : 'CCR sem resposta'}</Text>
         </View>
       </View>
 

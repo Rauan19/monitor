@@ -76,16 +76,57 @@ export function ErrorBanner({ message }) {
   );
 }
 
+// Abaixo disto a tela nao fala nada. As telas se atualizam de 5 em 5s ou de 15
+// em 15s, e o cache.js so marca desatualizado depois de duas falhas seguidas,
+// entao dado de menos de um minuto e, pra qualquer efeito pratico, o dado de
+// agora. Avisar sobre ele e ruido.
+const IDADE_PRA_MENCIONAR_MS = 60 * 1000;
+
+// Acima disto deixa de ser menção e passa a ser aviso: cinco minutos sem
+// conseguir atualizar e tempo suficiente pra tela estar mentindo.
+const IDADE_PRA_ALERTAR_MS = 5 * 60 * 1000;
+
 /**
- * Avisa que a tela esta mostrando a ultima resposta cacheada porque a rede
- * falhou. Sem isso o usuario nao teria como saber que o dado e antigo.
+ * Diz de quando e o dado que a tela esta mostrando, quando ele nao e de agora.
+ *
+ * O texto era "Sem conexao com o servidor", em laranja, com titulo em negrito.
+ * Tres problemas nisso:
+ *
+ * 1. Era afirmacao errada. O que aconteceu foi o celular nao conseguir falar
+ *    com o servidor em duas tentativas seguidas: Wi-Fi trocando pra dados,
+ *    elevador, sinal fraco. O servidor costuma estar no ar, e o CCR nem entra
+ *    nessa conta, que e outro indicador.
+ * 2. Era desproporcional. Aparecia com dado de dez segundos, com a mesma cara
+ *    de alarme que mereceria dado de meia hora.
+ * 3. Por isso virou alarme falso, e alarme falso treina quem olha a ignorar.
+ *    Num monitor isso e o pior resultado possivel: quando a queda for real, o
+ *    aviso ja nao significa nada.
+ *
+ * Agora e proporcional. Abaixo de um minuto, silencio. De um a cinco minutos,
+ * uma linha discreta dizendo so a idade do dado, que e o fato. Acima de cinco
+ * minutos, aviso de verdade, porque ai a tela realmente pode estar mentindo.
  */
 export function StaleBanner({ savedAt }) {
   if (!savedAt) return null;
+
+  const idade = Date.now() - new Date(savedAt).getTime();
+  if (!(idade >= IDADE_PRA_MENCIONAR_MS)) return null; // cobre NaN tambem
+
+  const alertar = idade >= IDADE_PRA_ALERTAR_MS;
+  const quando = relativeAgo(new Date(savedAt).toISOString());
+
+  if (!alertar) {
+    return (
+      <View style={styles.staleQuieto}>
+        <Text style={styles.staleQuietoTexto}>Atualizado {quando}</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.staleBanner}>
-      <Text style={styles.staleTitle}>Sem conexao com o servidor</Text>
-      <Text style={styles.staleText}>Mostrando dados de {relativeAgo(new Date(savedAt).toISOString())}</Text>
+      <Text style={styles.staleTitle}>Nao foi possivel atualizar</Text>
+      <Text style={styles.staleText}>Mostrando dados de {quando}</Text>
     </View>
   );
 }
@@ -178,6 +219,10 @@ const styles = StyleSheet.create({
   },
   staleTitle: { color: colors.amber, fontWeight: '700', fontSize: 12 },
   staleText: { color: colors.inkSoft, fontSize: 12, marginTop: 2 },
+  // Versao discreta, de um a cinco minutos: sem cor de alarme, sem negrito,
+  // sem borda. E uma legenda, nao um aviso.
+  staleQuieto: { paddingVertical: 4, marginBottom: 6 },
+  staleQuietoTexto: { color: colors.inkFaint, fontSize: 11 },
   pager: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14, marginTop: 10 },
   pagerBtn: {
     width: 32,

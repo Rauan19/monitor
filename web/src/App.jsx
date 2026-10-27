@@ -1160,7 +1160,10 @@ export default function App() {
         <div className={`side-status ${connected ? 'ok' : 'bad'}`}>
           <span className="dot" />
           <div>
-            <strong>{connected ? 'API conectada' : 'API offline'}</strong>
+            {/* Mesmo conserto do app: este campo e o status do CCR, nao da
+                nossa API. "API offline" fazia quem olha achar que o sistema
+                caiu quando o servidor so nao falou com o roteador agora. */}
+            <strong>{connected ? 'CCR conectado' : 'CCR sem resposta'}</strong>
             <span className="mono">{status ? (connected ? 'Sincronizando' : 'Sem resposta do CCR') : 'Aguardando'}</span>
           </div>
         </div>
