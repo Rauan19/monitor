@@ -4,6 +4,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
+// A dica do campo mostrava um IP de rede local inventado. Quem limpasse o campo
+// via um endereco que nunca existiu; agora ve o endereco real da API.
+import { DEFAULT_SERVER_URL } from '../defaultServer';
 import { ErrorBanner } from '../components/common';
 import PrimaryButton from '../components/PrimaryButton';
 
@@ -63,7 +66,7 @@ export default function LoginScreen() {
             style={[styles.input, styles.serverInput]}
             value={url}
             onChangeText={setUrl}
-            placeholder="http://192.168.0.10:3001"
+            placeholder={DEFAULT_SERVER_URL}
             placeholderTextColor={colors.inkFaint}
             autoCapitalize="none"
             autoCorrect={false}

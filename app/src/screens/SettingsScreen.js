@@ -10,6 +10,9 @@ import {
   sendTestPush,
   unregisterPushNotifications,
 } from '../notifications';
+// A dica do campo mostrava um IP de rede local inventado. Quem limpasse o campo
+// via um endereco que nunca existiu; agora ve o endereco real da API.
+import { DEFAULT_SERVER_URL } from '../defaultServer';
 import { Badge, Card, KeyValue } from '../components/common';
 import PrimaryButton from '../components/PrimaryButton';
 
@@ -128,7 +131,7 @@ export default function SettingsScreen() {
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="url"
-          placeholder="http://192.168.0.10:3001"
+          placeholder={DEFAULT_SERVER_URL}
           placeholderTextColor={colors.inkFaint}
         />
         <PrimaryButton label={saving ? 'Salvando…' : 'Salvar endereço'} onPress={handleSaveUrl} disabled={saving} />
