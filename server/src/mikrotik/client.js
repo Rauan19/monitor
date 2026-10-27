@@ -256,9 +256,38 @@ export class MikroTikClient {
     const tagWord = words.find((w) => w.startsWith('.tag='));
     const tag = tagWord ? tagWord.slice(5) : null;
 
-    const waiter = tag
-      ? this.pending.find((p) => p.tag === tag)
-      : this.pending[0];
+    // Sentenca sem tag nao pode ser atribuida por chute.
+    //
+    // Isto era `this.pending[0]`, o comando mais antigo da fila. Todo comando
+    // nosso passa pelo _write, que sempre poe tag, login incluido, entao uma
+    // sentenca sem tag e anomalia. E o chute tinha um custo assimetrico: uma
+    // sentenca de dados entrando no resultado do comando errado o corrompe, e
+    // um `!done` sem tag RESOLVE o comando errado antes da hora, devolvendo
+    // uma leitura cortada. Com mil sessoes PPPoE, isso e exatamente o sintoma
+    // de "o app mostra 157 online".
+    //
+    // Agora nao adivinha. `!fatal` continua indo pro mais antigo, porque e
+    // erro de nivel de conexao e nao de comando: o RouterOS manda sem tag
+    // quando vai derrubar a sessao, e engolir isso deixaria todo mundo
+    // esperando o timeout. Qualquer outra sentenca sem tag e descartada com
+    // aviso: o comando dela vai estourar o timeout, que e visivel e e
+    // retentado, em vez de devolver dado faltando, que passa por verdade.
+    let waiter;
+    if (tag) {
+      waiter = this.pending.find((p) => p.tag === tag);
+    } else if (words[0] === '!fatal') {
+      waiter = this.pending[0];
+    } else {
+      if (!this._avisouSentencaSemTag) {
+        this._avisouSentencaSemTag = true;
+        console.warn(
+          `[mikrotik] sentenca ${words[0]} sem .tag= com ${this.pending.length} comando(s) em voo; ` +
+            'descartada pra nao corromper a resposta de outro comando'
+        );
+      }
+      this._sentencasSemTag = (this._sentencasSemTag || 0) + 1;
+      return;
+    }
 
     if (!waiter) return;
 
@@ -443,6 +472,10 @@ export class MikroTikClient {
       // ao numero de sessoes ativas, medido por outro comando. Comparar com
       // sessoesLidasPorVez fecha o diagnostico.
       interfacesPppoeAtivas: this._ultimosContadoresPppoe ?? null,
+      // Quantas sentencas chegaram sem .tag= e foram descartadas. Se isto for
+      // maior que zero, o protocolo esta se comportando de um jeito que o
+      // codigo nao previa, e e o primeiro lugar pra olhar numa leitura cortada.
+      sentencasSemTagDescartadas: this._sentencasSemTag ?? 0,
     };
   }
 

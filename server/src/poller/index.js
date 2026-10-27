@@ -33,6 +33,83 @@ let falhasSeguidas = 0;
 // Quantas sessoes a leitura anterior trouxe, pra detectar uma queda brusca na
 // LEITURA (que e defeito nosso ou do CCR) e nao na rede.
 let ultimaLeituraDeSessoes = null;
+let leiturasSuspeitasSeguidas = 0;
+
+// Abaixo desta fracao da leitura anterior, a leitura e tratada como suspeita.
+const FRACAO_SUSPEITA = 0.5;
+
+// Rede pequena oscila: 8 de 12 clientes e metade, e e normal. Abaixo deste
+// numero de sessoes a protecao nem opina.
+const MINIMO_PRA_DESCONFIAR = 50;
+
+// Quantas leituras suspeitas SEGUIDAS ate acreditar nelas.
+//
+// Esta e a parte que nao pode faltar. Sem ela, uma queda em massa de verdade
+// seria ignorada pra sempre, e o monitor pararia de monitorar exatamente no
+// momento que importa. Com o poller a cada 10s, tres leituras batendo no mesmo
+// numero baixo sao ~30s de confirmacao: leitura cortada e intermitente e nao
+// sobrevive a isso, queda real sobrevive e passa a valer.
+const SUSPEITAS_ATE_ACREDITAR = 3;
+
+/**
+ * Decide se uma leitura de sessoes deve ser gravada.
+ *
+ * Por que isso existe: com 1035 sessoes no ar e uma leitura trazendo 157, o
+ * upsertOnlineSessions marca 878 clientes como offline. Isso nao erra so a
+ * contagem: alimenta o detector de queda em massa e dispara alerta de uma rede
+ * que esta inteira no ar. E, no sentido contrario, enterra uma queda real no
+ * meio do ruido. Enquanto nao se sabe se o CCR responde pouco ou se perdemos
+ * linhas no caminho, a unica conduta segura e nao gravar uma leitura
+ * implausivel, e dizer isso no log.
+ *
+ * Exportada porque e decisao com estado entre chamadas, e e justamente isso
+ * que precisa de teste.
+ */
+export function avaliarLeitura(quantidade) {
+  const anterior = ultimaLeituraDeSessoes;
+  const suspeita =
+    anterior != null &&
+    anterior >= MINIMO_PRA_DESCONFIAR &&
+    quantidade < anterior * FRACAO_SUSPEITA;
+
+  if (!suspeita) {
+    leiturasSuspeitasSeguidas = 0;
+    ultimaLeituraDeSessoes = quantidade;
+    return { aplicar: true };
+  }
+
+  leiturasSuspeitasSeguidas += 1;
+
+  if (leiturasSuspeitasSeguidas >= SUSPEITAS_ATE_ACREDITAR) {
+    // Insistiu: passa a valer. Nao mexe em ultimaLeituraDeSessoes pra cima,
+    // escreve o valor novo, que agora e a realidade aceita.
+    ultimaLeituraDeSessoes = quantidade;
+    leiturasSuspeitasSeguidas = 0;
+    return {
+      aplicar: true,
+      aviso:
+        `leitura de ${quantidade} sessoes se repetiu ${SUSPEITAS_ATE_ACREDITAR} vezes; ` +
+        'tratando como real a partir de agora',
+    };
+  }
+
+  // NAO atualiza ultimaLeituraDeSessoes: a referencia continua sendo a ultima
+  // leitura que a gente acredita. Senao duas leituras cortadas seguidas
+  // rebaixariam a referencia e a terceira passaria como normal.
+  return {
+    aplicar: false,
+    motivo:
+      `leitura de sessoes caiu de ${anterior} pra ${quantidade} (${leiturasSuspeitasSeguidas}/${SUSPEITAS_ATE_ACREDITAR}); ` +
+      'nao vou marcar centenas de clientes como offline com base nisso. ' +
+      'Se a rede caiu de verdade, a proxima leitura confirma e vale.',
+  };
+}
+
+/** Só pros testes: zera o estado entre casos. */
+export function _resetarAvaliacaoDeLeitura() {
+  ultimaLeituraDeSessoes = null;
+  leiturasSuspeitasSeguidas = 0;
+}
 
 // De quantos em quantos ciclos ler os contadores de banda. Com o poller a cada
 // 10s, 3 da uma leitura a cada 30s.
@@ -179,6 +256,22 @@ async function tick() {
   try {
     const clients = await mikrotik.getPppActive();
     falhasSeguidas = 0;
+
+    const veredito = avaliarLeitura(clients.length);
+    if (!veredito.aplicar) {
+      console.warn(`[poller] ${veredito.motivo}`);
+      // CCR respondeu, entao a conexao esta de pe: o que nao se confia e o
+      // conteudo da resposta. Mantem a contagem anterior em vez de zerar, pra
+      // nao transformar uma leitura ruim em "rede fora" na tela.
+      updatePollStatus({
+        connected: true,
+        onlineCount: getPollStatus()?.online_count ?? 0,
+        error: null,
+      });
+      return;
+    }
+    if (veredito.aviso) console.warn(`[poller] ${veredito.aviso}`);
+
     const result = upsertOnlineSessions(clients);
     updatePollStatus({
       connected: true,
@@ -194,20 +287,6 @@ async function tick() {
       // do normal, a conta nao esta errada: a leitura esta.
       console.log(
         `[poller] lidas=${clients.length} online=${result.onlineCount} +${result.connected} -${result.disconnected}`
-      );
-    }
-
-    // Queda brusca na leitura: avisa SEMPRE, mesmo sem ninguem conectar ou
-    // desconectar, porque e o caso em que o monitor mente calado. Mil sessoes
-    // virando 157 significa que a proxima gravacao marca 878 clientes como
-    // offline, e isso viraria alerta de queda em massa de uma rede que esta no
-    // ar. O numero fica no log pra dar pra olhar depois do fato.
-    const anterior = ultimaLeituraDeSessoes;
-    ultimaLeituraDeSessoes = clients.length;
-    if (anterior != null && anterior >= 50 && clients.length < anterior * 0.5) {
-      console.warn(
-        `[poller] leitura de sessoes caiu de ${anterior} pra ${clients.length} de um ciclo pro outro. ` +
-          'Se a rede nao caiu de verdade, a leitura do /ppp/active veio incompleta.'
       );
     }
 
