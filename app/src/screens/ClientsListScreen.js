@@ -10,6 +10,10 @@ import { withCache } from '../cache';
 const PAGE_SIZE = 20;
 
 const chaveDaLinha = (item) => item.session_key;
+
+// Quantas falhas de rede seguidas antes de avisar na tela. Mesmo numero que o
+// cache.js usa, pelo mesmo motivo.
+const FALHAS_PRA_AVISAR = 2;
 const emptyMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, pages: 1 };
 
 const FETCHERS = {
@@ -45,6 +49,7 @@ export default function ClientsListScreen({ mode }) {
   const [staleAt, setStaleAt] = useState(null);
   const [oltsPorId, setOltsPorId] = useState({});
   const focused = useRef(true);
+  const falhasSeguidas = useRef(0);
 
   const load = useCallback(async () => {
     try {
@@ -76,9 +81,21 @@ export default function ClientsListScreen({ mode }) {
       setStaleAt(stale ? savedAt : null);
       aplicar(res);
       chavesCarregadas.current.add(chaveCache);
+      falhasSeguidas.current = 0;
       setError('');
     } catch (err) {
-      setError(err.message || 'Falha ao carregar');
+      // Tropeço de rede nao merece banner vermelho na primeira vez. O
+      // request() ja insiste tres vezes numa falha instantanea; se mesmo assim
+      // falhou, o ciclo de 5s tenta de novo logo. Mostrar na hora era o que
+      // fazia aparecer "Nao foi possivel falar com o servidor" e, segundos
+      // depois, a lista cheia, como se o app estivesse quebrado.
+      //
+      // Erro do servidor (HTTP 500, 403) aparece na hora: ai nao e tropeço,
+      // insistir nao resolve e quem esta olhando precisa saber.
+      falhasSeguidas.current += 1;
+      if (!err.deRede || falhasSeguidas.current >= FALHAS_PRA_AVISAR) {
+        setError(err.message || 'Falha ao carregar');
+      }
     } finally {
       setLoading(false);
     }

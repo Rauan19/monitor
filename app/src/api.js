@@ -40,6 +40,24 @@ function erroDeRede(err) {
   return e;
 }
 
+// Quantas vezes insistir, e quanto esperar entre as tentativas.
+//
+// O caso real: ao abrir o app, as telas disparam as requisicoes no instante em
+// que montam, e o radio do celular costuma ainda estar subindo. O fetch falha
+// NA HORA, com "Network request failed", e a tela mostrava "Nao foi possivel
+// falar com o servidor". Cinco segundos depois o ciclo seguinte funcionava e a
+// lista aparecia. Quem usa via um erro que se curava sozinho, e concluia,
+// com razao, que o app esta lento.
+const TENTATIVAS_EXTRA = 2;
+const ESPERA_ENTRE_TENTATIVAS_MS = [400, 1200];
+
+// Abaixo disso a falha foi imediata, ou seja o aparelho nem conseguiu abrir a
+// conexao. E esse caso que vale insistir. Uma falha que demorou e servidor
+// lento ou rede ruim de verdade, e repetir so faria a pessoa esperar o dobro.
+const FALHA_IMEDIATA_MS = 2000;
+
+const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function request(path, options = {}) {
   const base = await getServerUrl();
   if (!base) {
@@ -49,23 +67,37 @@ async function request(path, options = {}) {
   }
   const token = await getToken();
 
-  const controle = new AbortController();
-  const prazo = setTimeout(() => controle.abort(), TIMEOUT_MS);
+  // So leitura e repetida. POST aqui cria OLT, aplica calibracao, remove
+  // cliente: insistir numa requisicao que talvez tenha chegado ao servidor
+  // duplicaria a escrita.
+  const metodo = (options.method || 'GET').toUpperCase();
+  const podeRepetir = metodo === 'GET';
+
   let res;
-  try {
-    res = await fetch(`${base}${path}`, {
-      ...options,
-      signal: controle.signal,
-      headers: {
-        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...options.headers,
-      },
-    });
-  } catch (err) {
-    throw erroDeRede(err);
-  } finally {
-    clearTimeout(prazo);
+  for (let tentativa = 0; ; tentativa += 1) {
+    const controle = new AbortController();
+    const prazo = setTimeout(() => controle.abort(), TIMEOUT_MS);
+    const inicio = Date.now();
+    try {
+      res = await fetch(`${base}${path}`, {
+        ...options,
+        signal: controle.signal,
+        headers: {
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...options.headers,
+        },
+      });
+      break;
+    } catch (err) {
+      const erro = erroDeRede(err);
+      const foiImediata = Date.now() - inicio < FALHA_IMEDIATA_MS;
+      const aindaTem = tentativa < TENTATIVAS_EXTRA;
+      if (!podeRepetir || !foiImediata || !aindaTem) throw erro;
+      await espera(ESPERA_ENTRE_TENTATIVAS_MS[tentativa]);
+    } finally {
+      clearTimeout(prazo);
+    }
   }
 
   // Renovacao deslizante: o servidor manda um token novo quando o atual passou
