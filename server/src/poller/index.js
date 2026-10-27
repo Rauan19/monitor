@@ -30,6 +30,10 @@ const FALHAS_ATE_RECONECTAR = 3;
 const FALHAS_ATE_MARCAR_QUEDA = 3;
 let falhasSeguidas = 0;
 
+// Quantas sessoes a leitura anterior trouxe, pra detectar uma queda brusca na
+// LEITURA (que e defeito nosso ou do CCR) e nao na rede.
+let ultimaLeituraDeSessoes = null;
+
 // De quantos em quantos ciclos ler os contadores de banda. Com o poller a cada
 // 10s, 3 da uma leitura a cada 30s.
 const CICLOS_POR_LEITURA_DE_BANDA = 3;
@@ -183,8 +187,27 @@ async function tick() {
     });
 
     if (result.connected || result.disconnected) {
+      // `lidas` e quantas sessoes o CCR devolveu nesta leitura; `online` e
+      // quantas ficaram marcadas no banco. As duas juntas separam "o CCR
+      // respondeu pouco" de "nos perdemos linhas", que dao o mesmo sintoma de
+      // contagem baixa no app e tem consertos opostos. Com `lidas` bem abaixo
+      // do normal, a conta nao esta errada: a leitura esta.
       console.log(
-        `[poller] online=${result.onlineCount} +${result.connected} -${result.disconnected}`
+        `[poller] lidas=${clients.length} online=${result.onlineCount} +${result.connected} -${result.disconnected}`
+      );
+    }
+
+    // Queda brusca na leitura: avisa SEMPRE, mesmo sem ninguem conectar ou
+    // desconectar, porque e o caso em que o monitor mente calado. Mil sessoes
+    // virando 157 significa que a proxima gravacao marca 878 clientes como
+    // offline, e isso viraria alerta de queda em massa de uma rede que esta no
+    // ar. O numero fica no log pra dar pra olhar depois do fato.
+    const anterior = ultimaLeituraDeSessoes;
+    ultimaLeituraDeSessoes = clients.length;
+    if (anterior != null && anterior >= 50 && clients.length < anterior * 0.5) {
+      console.warn(
+        `[poller] leitura de sessoes caiu de ${anterior} pra ${clients.length} de um ciclo pro outro. ` +
+          'Se a rede nao caiu de verdade, a leitura do /ppp/active veio incompleta.'
       );
     }
 

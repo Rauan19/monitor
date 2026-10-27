@@ -330,6 +330,14 @@ export class MikroTikClient {
       });
     }
 
+    // Guarda as duas contagens pra /api/system. `sentences` e o que a API
+    // mandou (inclui o !done e qualquer !re que nao virou linha); `rows` e o
+    // que viramos sessao. Se as duas forem ~157 o CCR respondeu 157, e o
+    // problema esta no roteador ou na consulta. Se sentences for ~1035 e rows
+    // for 157, estamos perdendo linhas no parse, e o problema e nosso.
+    this._ultimasSentencasSessoes = sentences.length;
+    this._ultimasSessoesLidas = rows.length;
+
     return rows;
   }
 
@@ -420,6 +428,21 @@ export class MikroTikClient {
     return {
       interfacesLidasPorVez: this._ultimasInterfacesLidas ?? null,
       filtroDeInterfaceFuncionando: !this._avisouFiltroInterface,
+      // Quantas linhas o /ppp/active/print devolveu na ultima leitura, e
+      // quantas sentencas a API mandou no total.
+      //
+      // Isto existe pra separar duas causas que dao o MESMO sintoma, "o app
+      // mostra 157 online quando ha mais de mil", e que tem consertos
+      // opostos: ou o CCR respondeu 157, ou ele respondeu mil e nos perdemos
+      // linhas na leitura. Sem esse numero as duas sao indistinguiveis de
+      // fora, e o banco nao ajuda, porque ele guarda o resultado, nao a
+      // leitura.
+      sessoesLidasPorVez: this._ultimasSessoesLidas ?? null,
+      sentencasNaUltimaLeituraDeSessoes: this._ultimasSentencasSessoes ?? null,
+      // Quantas interfaces pppoe-in existem. Como sao dinamicas, isto equivale
+      // ao numero de sessoes ativas, medido por outro comando. Comparar com
+      // sessoesLidasPorVez fecha o diagnostico.
+      interfacesPppoeAtivas: this._ultimosContadoresPppoe ?? null,
     };
   }
 
@@ -692,6 +715,16 @@ export class MikroTikClient {
         txByte: Number(row['tx-byte'] || 0),
       });
     }
+
+    // O numero de ouro pra comparar com sessoesLidasPorVez.
+    //
+    // Interface pppoe-in e dinamica: o RouterOS cria quando a sessao sobe e
+    // apaga quando ela cai. Entao este numero e, por definicao, a quantidade de
+    // sessoes PPPoE ativas, lido por outro comando na MESMA conexao com o
+    // mesmo CCR. Se aqui der mil e o /ppp/active der 157, nao ha duvida de
+    // interpretacao: as sessoes existem e e a nossa leitura delas que esta
+    // vindo cortada.
+    this._ultimosContadoresPppoe = rows.length;
 
     return rows;
   }
