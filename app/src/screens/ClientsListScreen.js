@@ -136,7 +136,7 @@ export default function ClientsListScreen({ mode }) {
       load();
       const id = setInterval(() => {
         if (focused.current) load();
-      }, 5000);
+      }, 10000);
       return () => {
         focused.current = false;
         clearInterval(id);

@@ -162,20 +162,36 @@ export default function HomeScreen() {
   // media por hora do dia sobre 7 dias nao muda em 10 segundos: recalcular
   // nesse ritmo so gastava CPU do servidor. O TTL do cache do servidor e de
   // 2 min, entao pedir a cada 2 min casa com ele.
+  //
+  // Cada chamada preenche o seu card assim que chega, em vez de esperar a mais
+  // lenta de um Promise.all.
   const loadPesado = useCallback(async () => {
     try {
       const { data } = await withCache(
         'home:pesado',
         async () => {
           const tz = new Date().getTimezoneOffset();
-          const [sys, hist, hourly, top, notifs] = await Promise.all([
-            api.system(),
-            api.systemHistory(24),
-            api.hourlyLoad(7, tz),
-            api.topConsumers(24, 5),
-            api.notifications({ page: 1, pageSize: 3 }),
+          const parcial = {};
+          const integrar = (chave, promessa) =>
+            promessa.then((val) => {
+              parcial[chave] = val;
+              setDados((atual) => ({ ...atual, [chave]: val }));
+              return val;
+            });
+
+          const resultados = await Promise.allSettled([
+            integrar('sys', api.system()),
+            integrar('hist', api.systemHistory(24)),
+            integrar('hourly', api.hourlyLoad(7, tz)),
+            integrar('top', api.topConsumers(24, 5)),
+            integrar('notifs', api.notifications({ page: 1, pageSize: 3 })),
           ]);
-          return { sys, hist, hourly, top, notifs };
+
+          const algumSucesso = resultados.some((r) => r.status === 'fulfilled');
+          if (!algumSucesso) {
+            throw resultados[0]?.reason || new Error('Falha ao carregar gráficos');
+          }
+          return parcial;
         },
         temConteudo.current ? null : (guardado) => setDados((atual) => ({ ...atual, ...guardado }))
       );

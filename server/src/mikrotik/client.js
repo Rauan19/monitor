@@ -514,7 +514,9 @@ export class MikroTikClient {
    * Somente leitura: CPU, memória, uptime, versão do CCR.
    */
   async getSystemResource() {
-    return this._comCache('getSystemResource', 5000, () => this._getSystemResource());
+    // Stale window de 120s (maior que o system-poller de 60s): quem abre o app
+    // recebe a ultima leitura na hora (0ms) sem esperar ida e volta ao CCR.
+    return this._comCache('getSystemResource', 5000, () => this._getSystemResource(), 120000);
   }
 
   async _getSystemResource() {
@@ -537,7 +539,7 @@ export class MikroTikClient {
    * Somente leitura: voltagem/temperatura (RouterOS 6 devolve uma linha, RouterOS 7 uma por sensor).
    */
   async getSystemHealth() {
-    return this._comCache('getSystemHealth', 5000, () => this._getSystemHealth());
+    return this._comCache('getSystemHealth', 5000, () => this._getSystemHealth(), 120000);
   }
 
   async _getSystemHealth() {

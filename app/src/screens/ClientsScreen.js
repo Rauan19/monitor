@@ -36,7 +36,7 @@ export default function ClientsScreen() {
       load();
       const id = setInterval(() => {
         if (active) load();
-      }, 5000);
+      }, 10000);
       return () => {
         active = false;
         clearInterval(id);

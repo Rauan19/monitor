@@ -363,6 +363,7 @@ export default function App() {
   const [pageDisconnected, setPageDisconnected] = useState(1);
   const [pageHistory, setPageHistory] = useState(1);
   const [query, setQuery] = useState('');
+  const [buscaFirme, setBuscaFirme] = useState('');
   const [portFilter, setPortFilter] = useState('');
   const [eventType, setEventType] = useState('');
   const [error, setError] = useState('');
@@ -480,7 +481,7 @@ export default function App() {
     // So a primeira pagina sem filtro vai pro cache: e ela que o painel abre
     // na proxima vez. Guardar busca e paginas do meio encheria o localStorage
     // com coisa que ninguem ve de novo.
-    const primeiraPagina = !query && !portFilter && !eventType;
+    const primeiraPagina = !buscaFirme && !portFilter && !eventType;
     const guardar = (chave, valor) => {
       if (primeiraPagina) gravarCache(chave, valor);
     };
@@ -515,49 +516,54 @@ export default function App() {
       })
       .catch(tratar);
 
-    api
-      .all({ q: query, port: portFilter, page: pageAll, pageSize: PAGE_SIZE })
-      .then((all) => {
-        setAllRows(all.items || []);
-        setAllMeta(meta(all));
-        guardar('all', all);
-        if (all.page && all.page !== pageAll) setPageAll(all.page);
-        pronto();
-      })
-      .catch(tratar);
-
-    api
-      .online({ q: query, page: pageOnline, pageSize: PAGE_SIZE })
-      .then((on) => {
-        setOnline(on.items || []);
-        setOnlineMeta(meta(on));
-        guardar('online', on);
-        if (on.page && on.page !== pageOnline) setPageOnline(on.page);
-        pronto();
-      })
-      .catch(tratar);
-
-    api
-      .disconnected({ q: query, hours: 24, page: pageDisconnected, pageSize: PAGE_SIZE })
-      .then((off) => {
-        setDisconnected(off.items || []);
-        setDisconnectedMeta(meta(off));
-        guardar('disconnected', off);
-        if (off.page && off.page !== pageDisconnected) setPageDisconnected(off.page);
-        pronto();
-      })
-      .catch(tratar);
-
-    api
-      .events({ q: query, type: eventType, hours: 168, page: pageHistory, pageSize: PAGE_SIZE })
-      .then((ev) => {
-        setEvents(ev.items || []);
-        setEventsMeta(meta(ev));
-        guardar('events', ev);
-        if (ev.page && ev.page !== pageHistory) setPageHistory(ev.page);
-        pronto();
-      })
-      .catch(tratar);
+    // Busca apenas a lista da aba visivel no momento, em vez de consultar as
+    // quatro listas (/api/all, /api/online, /api/disconnected e /api/events)
+    // ao mesmo tempo em todo ciclo.
+    if (tab === 'all') {
+      api
+        .all({ q: buscaFirme, port: portFilter, page: pageAll, pageSize: PAGE_SIZE })
+        .then((all) => {
+          setAllRows(all.items || []);
+          setAllMeta(meta(all));
+          guardar('all', all);
+          if (all.page && all.page !== pageAll) setPageAll(all.page);
+          pronto();
+        })
+        .catch(tratar);
+    } else if (tab === 'online') {
+      api
+        .online({ q: buscaFirme, page: pageOnline, pageSize: PAGE_SIZE })
+        .then((on) => {
+          setOnline(on.items || []);
+          setOnlineMeta(meta(on));
+          guardar('online', on);
+          if (on.page && on.page !== pageOnline) setPageOnline(on.page);
+          pronto();
+        })
+        .catch(tratar);
+    } else if (tab === 'disconnected') {
+      api
+        .disconnected({ q: buscaFirme, hours: 24, page: pageDisconnected, pageSize: PAGE_SIZE })
+        .then((off) => {
+          setDisconnected(off.items || []);
+          setDisconnectedMeta(meta(off));
+          guardar('disconnected', off);
+          if (off.page && off.page !== pageDisconnected) setPageDisconnected(off.page);
+          pronto();
+        })
+        .catch(tratar);
+    } else if (tab === 'history') {
+      api
+        .events({ q: buscaFirme, type: eventType, hours: 168, page: pageHistory, pageSize: PAGE_SIZE })
+        .then((ev) => {
+          setEvents(ev.items || []);
+          setEventsMeta(meta(ev));
+          guardar('events', ev);
+          if (ev.page && ev.page !== pageHistory) setPageHistory(ev.page);
+          pronto();
+        })
+        .catch(tratar);
+    }
   }
 
   // Pinta o painel com o que se sabia da ultima vez, ANTES de falar com a rede.
@@ -614,11 +620,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const t = setTimeout(() => setBuscaFirme(query.trim()), 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  useEffect(() => {
     if (!user) return;
     refresh();
-    const id = setInterval(refresh, 5000);
+    const id = setInterval(refresh, 10000);
     return () => clearInterval(id);
-  }, [user, query, portFilter, eventType, pageAll, pageOnline, pageDisconnected, pageHistory]);
+  }, [user, tab, buscaFirme, portFilter, eventType, pageAll, pageOnline, pageDisconnected, pageHistory]);
 
   useEffect(() => {
     if (!user) return;
@@ -696,7 +707,7 @@ export default function App() {
     setPageOnline(1);
     setPageDisconnected(1);
     setPageHistory(1);
-  }, [query, portFilter, eventType]);
+  }, [buscaFirme, portFilter, eventType]);
 
   useEffect(() => {
     if (!user || tab !== 'system') return;

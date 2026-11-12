@@ -5,6 +5,7 @@ import {
   getAddressNameMap,
   getBandwidthBaseline,
   getClientBySessionKey,
+  getClientSla,
   getDashboardStats,
   getHourlyLoad,
   getOlt,
@@ -510,7 +511,7 @@ apiRouter.get('/client-detail', (req, res) => {
   const events = listEventsForSession(sessionKey, { limit: 20 });
   const bandwidth = listBandwidthHistory({ client: session.name, hours: 24 });
   const live = getAllBandwidth()[session.name] || null;
-  const sla = getSlaStats({ days: 30 }).find((s) => s.sessionKey === sessionKey) || null;
+  const sla = getClientSla(sessionKey, { days: 30 });
 
   res.json({ session, events, bandwidth, live, sla });
 });

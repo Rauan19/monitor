@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +9,7 @@ import { formatDate, relativeAgo } from '../format';
 import { withCache } from '../cache';
 
 const PAGE_SIZE = 20;
+const chaveDoEvento = (item) => String(item.id);
 const emptyMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, pages: 1 };
 const TYPES = [
   { id: '', label: 'Todos' },
@@ -21,14 +22,14 @@ const TYPES = [
  * tocar. Porta, OLT e a regiao da porta vem do servidor junto do evento, porque
  * a pergunta que se faz lendo o historico e "esse que caiu fica em qual porta?".
  */
-function EventoRow({ item, navigation }) {
+const EventoRow = memo(function EventoRow({ item, onPress }) {
   const down = item.event_type === 'disconnected';
   const nome = item.alias || item.name || '—';
   const local = [item.loc_neighborhood, item.loc_city].filter(Boolean).join(', ');
 
   return (
     <Pressable
-      onPress={() => navigation.navigate('ClientDetail', { sessionKey: item.session_key })}
+      onPress={() => onPress(item.session_key)}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
     >
       <View style={styles.rowTopo}>
@@ -81,14 +82,17 @@ function EventoRow({ item, navigation }) {
       </View>
     </Pressable>
   );
-}
+});
 
 export default function HistoryScreen() {
   const navigation = useNavigation();
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(emptyMeta);
   const [page, setPage] = useState(1);
+  // `query` e o texto digitado; `buscaFirme` vai pra rede apos 350ms sem tecla,
+  // pra nao disparar consulta pesada no historico a cada letra digitada.
   const [query, setQuery] = useState('');
+  const [buscaFirme, setBuscaFirme] = useState('');
   const [type, setType] = useState('');
   // Chaves de cache que ja receberam dado fresco. Ver o comentario no
   // callback do withCache.
@@ -109,10 +113,10 @@ export default function HistoryScreen() {
           pages: res.pages || 1,
         });
       };
-      const chaveCache = `events:${type}:${query}:${page}`;
+      const chaveCache = `events:${type}:${buscaFirme}:${page}`;
       const { data: res, stale, savedAt } = await withCache(
         chaveCache,
-        () => api.events({ q: query, type, hours: 168, page, pageSize: PAGE_SIZE }),
+        () => api.events({ q: buscaFirme, type, hours: 168, page, pageSize: PAGE_SIZE }),
         // Mostra o guardado antes da rede responder so quando a tela ainda nao
         // tem o dado DESTA chave: primeira carga, ou o usuario trocou de pagina,
         // busca ou filtro. Numa atualizacao da mesma chave isso fazia o aviso de
@@ -134,24 +138,41 @@ export default function HistoryScreen() {
     } finally {
       setLoading(false);
     }
-  }, [query, type, page]);
+  }, [buscaFirme, type, page]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setBuscaFirme(query.trim()), 350);
+    return () => clearTimeout(t);
+  }, [query]);
 
   useEffect(() => {
     setPage(1);
-  }, [query, type]);
+  }, [buscaFirme, type]);
 
   useFocusEffect(
     useCallback(() => {
       focused.current = true;
       load();
+      // O poller do servidor consulta o CCR a cada 10s; pedir a cada 5s so
+      // duplicava consultas no historico sem possibilidade de dado novo.
       const id = setInterval(() => {
         if (focused.current) load();
-      }, 5000);
+      }, 10000);
       return () => {
         focused.current = false;
         clearInterval(id);
       };
     }, [load])
+  );
+
+  const abrirCliente = useCallback(
+    (sessionKey) => navigation.navigate('ClientDetail', { sessionKey }),
+    [navigation]
+  );
+
+  const renderItem = useCallback(
+    ({ item }) => <EventoRow item={item} onPress={abrirCliente} />,
+    [abrirCliente]
   );
 
   return (
@@ -171,8 +192,12 @@ export default function HistoryScreen() {
       ) : (
         <FlatList
           data={rows}
-          keyExtractor={(item) => String(item.id)}
-          renderItem={({ item }) => <EventoRow item={item} navigation={navigation} />}
+          keyExtractor={chaveDoEvento}
+          renderItem={renderItem}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          removeClippedSubviews
           ListEmptyComponent={<EmptyState title="Nenhum evento no período" hint="Conexões e desconexões ficam aqui." />}
           ListFooterComponent={<Pager meta={meta} onChange={setPage} />}
         />

@@ -1,6 +1,12 @@
 import { config } from '../config.js';
 import { mikrotik } from '../mikrotik/client.js';
-import { insertSystemStat, insertBandwidthSnapshot, insertLogEvents, pruneOldData } from '../db/index.js';
+import {
+  aquecerCacheAgregacao,
+  insertSystemStat,
+  insertBandwidthSnapshot,
+  insertLogEvents,
+  pruneOldData,
+} from '../db/index.js';
 import { getAllBandwidth } from './bandwidth.js';
 
 let timer = null;
@@ -37,6 +43,7 @@ async function tick() {
   }
 
   limparSePassouDoPrazo();
+  aquecerCacheAgregacao();
 }
 
 // Retencao e de 30 dias: limpar de minuto em minuto nao apaga nada a mais do

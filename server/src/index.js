@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import { config } from './config.js';
-import { getDb } from './db/index.js';
+import { aquecerCacheAgregacao, getDb } from './db/index.js';
 import { startPoller, stopPoller } from './poller/index.js';
 import { startSystemPoller, stopSystemPoller } from './poller/system.js';
 import { apiRouter } from './routes/api.js';
@@ -45,6 +45,7 @@ const server = app.listen(config.port, config.host, () => {
   console.log(`[server] http://${config.host}:${config.port}`);
   startPoller();
   startSystemPoller();
+  aquecerCacheAgregacao();
 });
 
 async function shutdown() {

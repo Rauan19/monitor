@@ -119,6 +119,7 @@ export function getDb() {
 
     CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_events_type_created ON events(event_type, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);
 
     CREATE TABLE IF NOT EXISTS poll_status (
@@ -708,9 +709,11 @@ export function upsertOnlineSessions(clients) {
   const now = new Date().toISOString();
 
   const selectOnline = database.prepare(
-    `SELECT session_key, name, address, caller_id FROM sessions WHERE is_online = 1`
+    `SELECT session_key, name, address, caller_id, service, profile FROM sessions WHERE is_online = 1`
   );
-  const findByKey = database.prepare(`SELECT * FROM sessions WHERE session_key = ?`);
+  const findByKey = database.prepare(
+    `SELECT session_key, is_online FROM sessions WHERE session_key = ?`
+  );
   const insertSession = database.prepare(`
     INSERT INTO sessions (
       session_key, name, address, caller_id, service, uptime, profile,
@@ -721,6 +724,14 @@ export function upsertOnlineSessions(clients) {
     UPDATE sessions
     SET name = ?, address = ?, caller_id = ?, service = ?, uptime = ?, profile = ?,
         last_seen_at = ?, disconnected_at = NULL, is_online = 1
+    WHERE session_key = ?
+  `);
+  // Clientes que ja estavam online no ciclo anterior e nao mudaram IP/MAC/perfil:
+  // atualiza so uptime e last_seen_at, que NAO tem indice. Isso evita reescrever
+  // os 7 indices secundarios de sessions mil vezes a cada 10 segundos.
+  const touchOnline = database.prepare(`
+    UPDATE sessions
+    SET uptime = ?, last_seen_at = ?
     WHERE session_key = ?
   `);
   const markOffline = database.prepare(`
@@ -735,66 +746,47 @@ export function upsertOnlineSessions(clients) {
 
   const apply = database.transaction((list) => {
     const previous = selectOnline.all();
-    const previousKeys = new Set(previous.map((row) => row.session_key));
+    const onlineByKey = new Map(previous.map((row) => [row.session_key, row]));
+    const previousKeys = new Set(onlineByKey.keys());
     const currentKeys = new Set();
     const currentByKey = new Map();
 
     for (const client of list) {
-      currentByKey.set(sessionKey(client), client);
       const key = sessionKey(client);
+      currentByKey.set(key, client);
       currentKeys.add(key);
+
+      const addr = client.address || null;
+      const caller = client.callerId || null;
+      const srv = client.service || null;
+      const up = client.uptime || null;
+      const prof = client.profile || null;
+
+      const onlineRow = onlineByKey.get(key);
+      if (onlineRow) {
+        if (
+          onlineRow.name === client.name &&
+          onlineRow.address === addr &&
+          onlineRow.caller_id === caller &&
+          onlineRow.service === srv &&
+          onlineRow.profile === prof
+        ) {
+          touchOnline.run(up, now, key);
+        } else {
+          updateOnline.run(client.name, addr, caller, srv, up, prof, now, key);
+        }
+        continue;
+      }
 
       const existing = findByKey.get(key);
       if (!existing) {
-        insertSession.run(
-          key,
-          client.name,
-          client.address || null,
-          client.callerId || null,
-          client.service || null,
-          client.uptime || null,
-          client.profile || null,
-          now,
-          now
-        );
-        insertEvent.run(
-          key,
-          client.name,
-          client.address || null,
-          client.callerId || null,
-          'connected',
-          now
-        );
+        insertSession.run(key, client.name, addr, caller, srv, up, prof, now, now);
+        insertEvent.run(key, client.name, addr, caller, 'connected', now);
       } else if (existing.is_online === 0) {
-        updateOnline.run(
-          client.name,
-          client.address || null,
-          client.callerId || null,
-          client.service || null,
-          client.uptime || null,
-          client.profile || null,
-          now,
-          key
-        );
-        insertEvent.run(
-          key,
-          client.name,
-          client.address || null,
-          client.callerId || null,
-          'connected',
-          now
-        );
+        updateOnline.run(client.name, addr, caller, srv, up, prof, now, key);
+        insertEvent.run(key, client.name, addr, caller, 'connected', now);
       } else {
-        updateOnline.run(
-          client.name,
-          client.address || null,
-          client.callerId || null,
-          client.service || null,
-          client.uptime || null,
-          client.profile || null,
-          now,
-          key
-        );
+        updateOnline.run(client.name, addr, caller, srv, up, prof, now, key);
       }
     }
 
@@ -972,26 +964,30 @@ export function listEvents({
     params.push(type);
   }
 
+  let joinCount = '';
   if (q) {
     // A busca tambem acha pelo apelido e pelo nome da porta, que e a regiao:
     // procurar "Centro" no historico passa a trazer as quedas daquela porta.
+    // Usa LEFT JOIN em vez de subquery correlacionada por linha.
+    joinCount = `
+      LEFT JOIN sessions s ON s.session_key = e.session_key
+      LEFT JOIN port_labels pl ON pl.olt_id = COALESCE(s.olt_id, 0) AND pl.port = s.ont_port
+    `;
     where += ` AND (
       e.name LIKE ? OR
       IFNULL(e.address, '') LIKE ? OR
       IFNULL(e.caller_id, '') LIKE ? OR
       IFNULL(s.alias, '') LIKE ? OR
-      IFNULL((SELECT pl.label FROM port_labels pl
-               WHERE pl.olt_id = COALESCE(s.olt_id, 0) AND pl.port = s.ont_port), '') LIKE ?
+      IFNULL(pl.label, '') LIKE ?
     )`;
     const like = `%${q}%`;
     params.push(like, like, like, like, like);
   }
 
+  // Sem busca (q vazio), nao faz LEFT JOIN no COUNT(*): o indice composto
+  // (event_type, created_at) ou (created_at) responde na hora sem tocar em sessions.
   const total = database
-    .prepare(
-      `SELECT COUNT(*) AS c FROM events e
-       LEFT JOIN sessions s ON s.session_key = e.session_key ${where}`
-    )
+    .prepare(`SELECT COUNT(*) AS c FROM events e ${joinCount} ${where}`)
     .get(...params).c;
   const meta = normalizePage(page, pageSize, total);
   const items = database
@@ -1000,16 +996,12 @@ export function listEvents({
       SELECT e.id, e.session_key, e.name, e.address, e.caller_id, e.event_type, e.created_at,
              s.alias, s.ont_port, s.olt_id, s.is_online,
              s.loc_region, s.loc_neighborhood, s.loc_city,
-             (SELECT o.name FROM olts o WHERE o.id = s.olt_id) AS olt_name,
-             (SELECT pl.label FROM port_labels pl
-               WHERE pl.olt_id = COALESCE(s.olt_id, 0) AND pl.port = s.ont_port) AS port_label
+             o.name AS olt_name,
+             pl.label AS port_label
       FROM events e
-      -- Porta, OLT e localizacao ficam em sessions, nao no evento: o evento
-      -- guarda so o retrato do momento (nome, IP, MAC). O LEFT JOIN traz a
-      -- situacao ATUAL do cliente, que e o que interessa pra quem esta lendo o
-      -- historico ("esse que caiu fica em qual porta?"). LEFT porque cliente
-      -- removido deixa os eventos dele no historico.
       LEFT JOIN sessions s ON s.session_key = e.session_key
+      LEFT JOIN olts o ON o.id = s.olt_id
+      LEFT JOIN port_labels pl ON pl.olt_id = COALESCE(s.olt_id, 0) AND pl.port = s.ont_port
       ${where}
       ORDER BY e.created_at DESC
       LIMIT ? OFFSET ?
@@ -1403,12 +1395,37 @@ function calcBandwidthBaseline({ hours }) {
 // requisicao. Com varias telas consultando a cada 10s isso somava segundos de
 // CPU por minuto no servidor.
 const TTL_AGREGACAO_MS = Number(process.env.AGGREGATE_CACHE_MS || 120000);
+// Acima do TTL mas abaixo deste limite, devolve o valor guardado NA HORA (0ms)
+// e agenda a atualizacao pro proximo ciclo do event loop (stale-while-revalidate).
+// Assim a primeira consulta ao abrir o app nunca fica pendurada recalculando
+// centenas de milhares de amostras de banda.
+const MAX_OBSOLETO_AGREGACAO_MS = Number(process.env.AGGREGATE_STALE_MS || 60 * 60 * 1000);
 const cacheAgregacao = new Map();
+const atualizandoAgregacao = new Set();
 
 function memo(chave, calcular) {
   const agora = Date.now();
   const guardado = cacheAgregacao.get(chave);
-  if (guardado && agora - guardado.em < TTL_AGREGACAO_MS) return guardado.valor;
+  if (guardado) {
+    const idade = agora - guardado.em;
+    if (idade < TTL_AGREGACAO_MS) return guardado.valor;
+    if (idade < MAX_OBSOLETO_AGREGACAO_MS) {
+      if (!atualizandoAgregacao.has(chave)) {
+        atualizandoAgregacao.add(chave);
+        setImmediate(() => {
+          try {
+            const valor = calcular();
+            cacheAgregacao.set(chave, { em: Date.now(), valor });
+          } catch (err) {
+            console.error(`[db] erro ao atualizar cache ${chave}:`, err?.message || err);
+          } finally {
+            atualizandoAgregacao.delete(chave);
+          }
+        });
+      }
+      return guardado.valor;
+    }
+  }
   const valor = calcular();
   cacheAgregacao.set(chave, { em: agora, valor });
   return valor;
@@ -1417,6 +1434,38 @@ function memo(chave, calcular) {
 /** Invalida o cache de agregacao (usado quando a limpeza apaga historico). */
 export function limparCacheAgregacao() {
   cacheAgregacao.clear();
+  atualizandoAgregacao.clear();
+}
+
+/**
+ * Pre-aquece em background (uma etapa por tick do event loop, pra nao segurar
+ * nenhuma requisicao HTTP) as consultas agregadas que a tela inicial e a aba
+ * Estatisticas pedem ao abrir o app.
+ */
+export function aquecerCacheAgregacao() {
+  const tarefas = [
+    () => getTopConsumers({ hours: 24, limit: 5 }),
+    () => getTopConsumers({ hours: 24, limit: 10 }),
+    () => getHourlyLoad({ days: 7, tzOffsetMinutes: 180 }),
+    () => getHourlyLoad({ days: 7, tzOffsetMinutes: 0 }),
+    () => getBandwidthBaseline({ hours: 168 }),
+    () => computeSlaRows(30),
+    () => listLogTopics(),
+  ];
+  let idx = 0;
+  function proximo() {
+    if (idx >= tarefas.length) return;
+    const fn = tarefas[idx++];
+    setImmediate(() => {
+      try {
+        fn();
+      } catch {
+        // best-effort
+      }
+      proximo();
+    });
+  }
+  proximo();
 }
 
 export function getHourlyLoad({ days = 7, tzOffsetMinutes = 0 } = {}) {
@@ -1513,67 +1562,151 @@ export function listLogEvents({ q = '', topic = '', hours = 168, page = 1, pageS
 }
 
 export function listLogTopics() {
-  const database = getDb();
-  const rows = database
-    .prepare(`SELECT DISTINCT topics FROM log_events WHERE topics IS NOT NULL AND topics != '' LIMIT 2000`)
-    .all();
-  const set = new Set();
-  for (const r of rows) {
-    String(r.topics)
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean)
-      .forEach((t) => set.add(t));
-  }
-  return [...set].sort();
+  return memo('logTopics', () => {
+    const database = getDb();
+    // Olha os 5.000 registros mais recentes usando o indice primario em vez de
+    // varrer 150 mil linhas da tabela inteira.
+    const rows = database
+      .prepare(
+        `SELECT DISTINCT topics FROM (
+           SELECT topics FROM log_events ORDER BY id DESC LIMIT 5000
+         ) WHERE topics IS NOT NULL AND topics != ''`
+      )
+      .all();
+    const set = new Set();
+    for (const r of rows) {
+      String(r.topics)
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .forEach((t) => set.add(t));
+    }
+    return [...set].sort();
+  });
 }
 
-function computeSlaRows(days) {
-  const database = getDb();
-  const sinceIso = daysAgoIso(days);
-  const sinceMs = Date.parse(sinceIso);
-  const nowMs = Date.now();
-  const periodMs = nowMs - sinceMs;
+function calcSlaForEvents(session, initialEventType, events, sinceMs, nowMs, periodMs) {
+  let state = initialEventType || 'connected';
+  let cursor = sinceMs;
+  let downtimeMs = 0;
 
-  const sessions = database.prepare(`SELECT session_key, name, alias, ont_port FROM sessions`).all();
-  const lastBeforePrep = database.prepare(
-    `SELECT event_type FROM events WHERE session_key = ? AND created_at < ? ORDER BY created_at DESC LIMIT 1`
-  );
-  const eventsPrep = database.prepare(
-    `SELECT event_type, created_at FROM events WHERE session_key = ? AND created_at >= ? ORDER BY created_at ASC`
-  );
-
-  const results = [];
-  for (const s of sessions) {
-    const before = lastBeforePrep.get(s.session_key, sinceIso);
-    let state = before ? before.event_type : 'connected';
-    let cursor = sinceMs;
-    let downtimeMs = 0;
-
-    const events = eventsPrep.all(s.session_key, sinceIso);
+  if (events) {
     for (const ev of events) {
       const t = Date.parse(ev.created_at);
       if (state === 'disconnected') downtimeMs += t - cursor;
       cursor = t;
       state = ev.event_type;
     }
-    if (state === 'disconnected') downtimeMs += nowMs - cursor;
-
-    const uptimePct = periodMs > 0 ? Math.max(0, Math.min(100, 100 - (downtimeMs / periodMs) * 100)) : 100;
-    results.push({
-      sessionKey: s.session_key,
-      name: s.alias || s.name,
-      port: s.ont_port ?? null,
-      uptimePct: Number(uptimePct.toFixed(2)),
-      downtimeMinutes: Math.round(downtimeMs / 60000),
-    });
   }
+  if (state === 'disconnected') downtimeMs += nowMs - cursor;
 
-  return results;
+  const uptimePct = periodMs > 0 ? Math.max(0, Math.min(100, 100 - (downtimeMs / periodMs) * 100)) : 100;
+  return {
+    sessionKey: session.session_key,
+    name: session.alias || session.name,
+    port: session.ont_port ?? null,
+    uptimePct: Number(uptimePct.toFixed(2)),
+    downtimeMinutes: Math.round(downtimeMs / 60000),
+  };
+}
+
+/**
+ * Calcula o SLA de UM unico cliente para /api/client-detail.
+ * Antes, abrir a ficha de um cliente chamava getSlaStats({ days: 30 }).find(...),
+ * que rodava mais de 2.100 queries em todos os clientes so pra achar um!
+ */
+export function getClientSla(sessionKey, { days = 30 } = {}) {
+  const database = getDb();
+  const s = database
+    .prepare(`SELECT session_key, name, alias, ont_port FROM sessions WHERE session_key = ?`)
+    .get(sessionKey);
+  if (!s) return null;
+
+  const sinceIso = daysAgoIso(days);
+  const sinceMs = Date.parse(sinceIso);
+  const nowMs = Date.now();
+  const periodMs = nowMs - sinceMs;
+
+  const before = database
+    .prepare(
+      `SELECT event_type FROM events WHERE session_key = ? AND created_at < ? ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(sessionKey, sinceIso);
+  const events = database
+    .prepare(
+      `SELECT event_type, created_at FROM events WHERE session_key = ? AND created_at >= ? ORDER BY created_at ASC`
+    )
+    .all(sessionKey, sinceIso);
+
+  return calcSlaForEvents(s, before?.event_type, events, sinceMs, nowMs, periodMs);
+}
+
+function computeSlaRows(days) {
+  return memo(`slaRows:${days}`, () => {
+    const database = getDb();
+    const sinceIso = daysAgoIso(days);
+    const sinceMs = Date.parse(sinceIso);
+    const nowMs = Date.now();
+    const periodMs = nowMs - sinceMs;
+
+    const sessions = database.prepare(`SELECT session_key, name, alias, ont_port FROM sessions`).all();
+
+    // Busca em lote (2 queries no total em vez de 2 por cliente = ~2.150 queries)
+    const beforeRows = database
+      .prepare(
+        `SELECT e.session_key, e.event_type
+         FROM events e
+         JOIN (
+           SELECT session_key, MAX(created_at) AS max_created
+           FROM events
+           WHERE created_at < ?
+           GROUP BY session_key
+         ) ult ON e.session_key = ult.session_key AND e.created_at = ult.max_created`
+      )
+      .all(sinceIso);
+    const beforeByKey = new Map();
+    for (const r of beforeRows) {
+      beforeByKey.set(r.session_key, r.event_type);
+    }
+
+    const allEvents = database
+      .prepare(
+        `SELECT session_key, event_type, created_at
+         FROM events
+         WHERE created_at >= ?
+         ORDER BY created_at ASC`
+      )
+      .all(sinceIso);
+    const eventsByKey = new Map();
+    for (const ev of allEvents) {
+      let arr = eventsByKey.get(ev.session_key);
+      if (!arr) {
+        arr = [];
+        eventsByKey.set(ev.session_key, arr);
+      }
+      arr.push(ev);
+    }
+
+    const results = [];
+    for (const s of sessions) {
+      results.push(
+        calcSlaForEvents(
+          s,
+          beforeByKey.get(s.session_key),
+          eventsByKey.get(s.session_key),
+          sinceMs,
+          nowMs,
+          periodMs
+        )
+      );
+    }
+
+    return results;
+  });
 }
 
 export function getSlaStats({ days = 30 } = {}) {
-  return computeSlaRows(days).sort((a, b) => a.uptimePct - b.uptimePct);
+  return [...computeSlaRows(days)].sort((a, b) => a.uptimePct - b.uptimePct);
 }
 
 export function getSlaByPort({ days = 30 } = {}) {
@@ -1729,6 +1862,8 @@ export function pruneOldData(days = 30) {
   apagadas += database.prepare(`DELETE FROM bandwidth_samples WHERE created_at < ?`).run(cutoff).changes;
   apagadas += database.prepare(`DELETE FROM log_events WHERE fetched_at < ?`).run(cutoff).changes;
   apagadas += database.prepare(`DELETE FROM link_events WHERE created_at < ?`).run(cutoff).changes;
+  apagadas += database.prepare(`DELETE FROM events WHERE created_at < ?`).run(cutoff).changes;
+  apagadas += database.prepare(`DELETE FROM notifications WHERE created_at < ?`).run(cutoff).changes;
 
   // Checkpoint so quando o WAL realmente cresceu. O checkpoint automatico do
   // SQLite da conta do dia a dia; o TRUNCATE existe pro caso do servidor ficar

@@ -27,7 +27,16 @@ const MAX_BYTES = 256 * 1024;
 // nao descreve mais a rede.
 const VALIDADE_MS = Number(12 * 60 * 60 * 1000);
 
+// Cache em memoria RAM pra evitar JSON.parse + leitura de disco ao trocar de
+// aba dentro da mesma sessao do app.
+const memoria = new Map();
+
 export async function readCache(key) {
+  const emRam = memoria.get(key);
+  if (emRam) {
+    if (Date.now() - emRam.savedAt <= VALIDADE_MS) return emRam;
+    memoria.delete(key);
+  }
   try {
     const raw = await AsyncStorage.getItem(PREFIX + key);
     if (!raw) return null;
@@ -39,6 +48,7 @@ export async function readCache(key) {
       AsyncStorage.removeItem(PREFIX + key).catch(() => {});
       return null;
     }
+    memoria.set(key, parsed);
     return parsed; // { data, savedAt }
   } catch {
     return null;
@@ -46,8 +56,10 @@ export async function readCache(key) {
 }
 
 export async function writeCache(key, data) {
+  const entry = { data, savedAt: Date.now() };
+  memoria.set(key, entry);
   try {
-    const raw = JSON.stringify({ data, savedAt: Date.now() });
+    const raw = JSON.stringify(entry);
     if (raw.length > MAX_BYTES) return;
     await AsyncStorage.setItem(PREFIX + key, raw);
   } catch {
@@ -77,32 +89,35 @@ const falhasSeguidas = new Map();
  * original, pra tela mostrar o banner de erro como antes.
  */
 export async function withCache(key, fetcher, aoReceberCache) {
-  // Entrega o que ja esta guardado ANTES de esperar a rede. Sem isso, o cache
-  // so servia quando a requisicao falhava: numa rede lenta (voltando de uma
-  // area sem sinal, 3G ruim) a tela ficava no "carregando" ate a resposta
-  // chegar, mesmo tendo os dados da ultima vez no aparelho. E por isso que o
-  // app parecia muito mais lento que o painel web, que roda em conexao boa.
-  //
-  // Padrao "mostra o que tem, atualiza quando chegar": o usuario ve a tela
-  // preenchida na hora e ela se corrige sozinha quando a resposta chega.
-  //
-  // Isso vale SO quando a tela ainda nao tem o que mostrar. As telas se
-  // atualizam a cada 10s, e quando `aoReceberCache` rodava nessas atualizacoes
-  // tambem, o resultado era a tela tremendo: o callback marcava o dado como
-  // desatualizado, o aviso aparecia, a resposta chegava uns instantes depois e
-  // ele sumia, empurrando o conteudo pra cima e pra baixo duas vezes a cada
-  // ciclo. Por isso quem chama passa `null` aqui depois da primeira carga.
+  // Dispara a requisicao de rede IMEDIATAMENTE, em paralelo com a leitura do
+  // cache em disco. Antes o `await readCache(key)` vinha antes de `fetcher()`,
+  // entao na primeira consulta (ou com disco ocupado) o pacote HTTP nem saia
+  // do celular enquanto o AsyncStorage nao terminasse de ler.
+  let redeConcluiu = false;
+
   if (aoReceberCache) {
-    const guardado = await readCache(key);
-    if (guardado) aoReceberCache(guardado.data, guardado.savedAt);
+    const emRam = memoria.get(key);
+    if (emRam && Date.now() - emRam.savedAt <= VALIDADE_MS) {
+      aoReceberCache(emRam.data, emRam.savedAt);
+    } else {
+      readCache(key)
+        .then((guardado) => {
+          if (guardado && !redeConcluiu) {
+            aoReceberCache(guardado.data, guardado.savedAt);
+          }
+        })
+        .catch(() => {});
+    }
   }
 
   try {
     const data = await fetcher();
+    redeConcluiu = true;
     writeCache(key, data); // sem await: nao atrasa a tela
     falhasSeguidas.delete(key);
     return { data, stale: false, savedAt: null };
   } catch (err) {
+    redeConcluiu = true;
     const falhas = (falhasSeguidas.get(key) || 0) + 1;
     falhasSeguidas.set(key, falhas);
 
@@ -120,6 +135,7 @@ export async function withCache(key, fetcher, aoReceberCache) {
 }
 
 export async function clearCache() {
+  memoria.clear();
   try {
     const keys = await AsyncStorage.getAllKeys();
     const ours = keys.filter((k) => k.startsWith(PREFIX));
