@@ -10,8 +10,19 @@ import {
 import { getAllBandwidth } from './bandwidth.js';
 
 let timer = null;
+let timerInicial = null;
+let rodando = false;
+
+// Desencontra o system-poller (60s) do poller principal (10s).
+// Sem esse atraso inicial de 5s, os dois davam partida no mesmo milissegundo
+// (0s, 60s, 120s...) e disputavam o CCR juntos. Com 5s de defasagem, o
+// system-poller roda em 5s, 65s, 125s..., exatamente no meio da janela ociosa
+// entre os ciclos de 10s do poller principal.
+const ATRASO_INICIAL_MS = 5000;
 
 async function tick() {
+  if (rodando) return;
+  rodando = true;
   try {
     const [resource, health] = await Promise.all([
       mikrotik.getSystemResource(),
@@ -44,6 +55,7 @@ async function tick() {
 
   limparSePassouDoPrazo();
   aquecerCacheAgregacao();
+  rodando = false;
 }
 
 // Retencao e de 30 dias: limpar de minuto em minuto nao apaga nada a mais do
@@ -67,13 +79,20 @@ function limparSePassouDoPrazo() {
 }
 
 export function startSystemPoller() {
-  if (timer) return;
-  console.log(`[system-poller] iniciando, a cada ${config.systemPollIntervalMs}ms`);
-  tick();
-  timer = setInterval(tick, config.systemPollIntervalMs);
+  if (timer || timerInicial) return;
+  console.log(`[system-poller] iniciando, a cada ${config.systemPollIntervalMs}ms (defasado em ${ATRASO_INICIAL_MS}ms)`);
+  timerInicial = setTimeout(() => {
+    timerInicial = null;
+    tick();
+    timer = setInterval(tick, config.systemPollIntervalMs);
+  }, ATRASO_INICIAL_MS);
 }
 
 export function stopSystemPoller() {
+  if (timerInicial) {
+    clearTimeout(timerInicial);
+    timerInicial = null;
+  }
   if (timer) {
     clearInterval(timer);
     timer = null;

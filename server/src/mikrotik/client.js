@@ -50,6 +50,7 @@ export class MikroTikClient {
     this.connected = false;
     this.connecting = null;
     this.pending = [];
+    this.fila = [];
     this.tagSeq = 1;
     this._cache = new Map(); // chave -> { em, valor }
     this._emAndamento = new Map();
@@ -168,7 +169,14 @@ export class MikroTikClient {
 
   _failAll(err) {
     const pending = this.pending.splice(0);
-    for (const item of pending) item.reject(err);
+    const fila = this.fila.splice(0);
+    for (const item of pending) {
+      if (item.timer) clearTimeout(item.timer);
+      item.reject(err);
+    }
+    for (const item of fila) {
+      item.reject(err);
+    }
   }
 
   _onData(chunk) {
@@ -296,6 +304,7 @@ export class MikroTikClient {
     if (words[0] === '!done' || words[0] === '!trap' || words[0] === '!fatal') {
       this.pending = this.pending.filter((p) => p !== waiter);
       clearTimeout(waiter.timer);
+      this._despacharProximo();
       if (words[0] === '!trap' || words[0] === '!fatal') {
         const msg =
           words.find((w) => w.startsWith('=message='))?.slice(9) || words[0];
@@ -311,18 +320,41 @@ export class MikroTikClient {
       return Promise.reject(new Error('Não conectado ao MikroTik'));
     }
 
-    const tag = String(this.tagSeq++);
-    const payload = encodeSentence([...words, `.tag=${tag}`]);
-
+    // Enfileira os comandos pra enviar um por vez na conexao TCP unica.
+    // Sem fila, quando o poller (10s) e o system-poller (60s) batiam juntos,
+    // despejavam /ppp/active/print (~1000 sessoes), /interface/print,
+    // /system/resource/print, /system/health/print e /log/print ao mesmo tempo
+    // no socket; o relogio de timeout de todos comecava a correr na mesma hora
+    // enquanto o CCR ainda serializava o primeiro comando pesado.
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending = this.pending.filter((p) => p.tag !== tag);
-        reject(new Error('Timeout aguardando resposta da API RouterOS'));
-      }, config.mikrotik.timeout);
-
-      this.pending.push({ tag, sentences: [], resolve, reject, timer });
-      this.socket.write(payload);
+      this.fila.push({ words, resolve, reject });
+      this._despacharProximo();
     });
+  }
+
+  _despacharProximo() {
+    if (!this.socket || !this.connected) return;
+    if (this.pending.length > 0) return;
+    const proximo = this.fila.shift();
+    if (!proximo) return;
+
+    const tag = String(this.tagSeq++);
+    const payload = encodeSentence([...proximo.words, `.tag=${tag}`]);
+
+    const timer = setTimeout(() => {
+      this.pending = this.pending.filter((p) => p.tag !== tag);
+      proximo.reject(new Error('Timeout aguardando resposta da API RouterOS'));
+      this._despacharProximo();
+    }, config.mikrotik.timeout);
+
+    this.pending.push({
+      tag,
+      sentences: [],
+      resolve: proximo.resolve,
+      reject: proximo.reject,
+      timer,
+    });
+    this.socket.write(payload);
   }
 
   /**
