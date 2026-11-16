@@ -9,6 +9,7 @@ import { formatDate, relativeAgo } from '../format';
 import { withCache } from '../cache';
 
 const PAGE_SIZE = 20;
+const FALHAS_PRA_AVISAR = 2;
 const chaveDoEvento = (item) => String(item.id);
 const emptyMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, pages: 1 };
 const TYPES = [
@@ -101,10 +102,14 @@ export default function HistoryScreen() {
   const [error, setError] = useState('');
   const [staleAt, setStaleAt] = useState(null);
   const focused = useRef(true);
+  const falhasSeguidas = useRef(0);
+  const reqId = useRef(0);
 
   const load = useCallback(async () => {
+    const idAtual = ++reqId.current;
     try {
       const aplicar = (res) => {
+        if (idAtual !== reqId.current) return;
         setRows(res.items || []);
         setMeta({
           page: res.page || 1,
@@ -124,19 +129,26 @@ export default function HistoryScreen() {
         chavesCarregadas.current.has(chaveCache)
           ? null
           : (guardado, salvoEm) => {
+              if (idAtual !== reqId.current) return;
               aplicar(guardado);
               setStaleAt(salvoEm);
               setLoading(false);
             }
       );
+      if (idAtual !== reqId.current) return;
       setStaleAt(stale ? savedAt : null);
       aplicar(res);
       chavesCarregadas.current.add(chaveCache);
+      falhasSeguidas.current = 0;
       setError('');
     } catch (err) {
-      setError(err.message || 'Falha ao carregar');
+      if (idAtual !== reqId.current) return;
+      falhasSeguidas.current += 1;
+      if (!err.deRede || falhasSeguidas.current >= FALHAS_PRA_AVISAR) {
+        setError(err.message || 'Falha ao carregar');
+      }
     } finally {
-      setLoading(false);
+      if (idAtual === reqId.current) setLoading(false);
     }
   }, [buscaFirme, type, page]);
 

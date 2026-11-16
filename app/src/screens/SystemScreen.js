@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, radius } from '../theme';
@@ -7,6 +7,7 @@ import { Card, ErrorBanner, KeyValue, Pager, SearchBar } from '../components/com
 import MiniBars from '../components/MiniBars';
 import { formatBytes, formatDate } from '../format';
 
+const FALHAS_PRA_AVISAR = 2;
 const emptyMeta = { page: 1, pageSize: 10, total: 0, pages: 1 };
 const metaOf = (res) => ({ page: res.page || 1, pageSize: res.pageSize || 10, total: res.total || 0, pages: res.pages || 1 });
 
@@ -47,16 +48,42 @@ export default function SystemScreen() {
   // demora pra tentar de novo.
   const [erroRapido, setErroRapido] = useState('');
   const [erroPesado, setErroPesado] = useState('');
+  const falhasRapido = useRef(0);
+  const falhasPesado = useRef(0);
+  const reqDhcpId = useRef(0);
 
   // 350ms depois da ultima tecla, como na lista de clientes.
   useEffect(() => {
-    const t = setTimeout(() => setDhcpBusca(dhcpQuery), 350);
+    const t = setTimeout(() => setDhcpBusca(dhcpQuery.trim()), 350);
     return () => clearTimeout(t);
   }, [dhcpQuery]);
 
   useEffect(() => {
     setDhcpPage(1);
   }, [dhcpBusca]);
+
+  // Busca de DHCP isolada: pesquisar um lease nao precisa recarregar
+  // interfaces, filas, wireless e logs do CCR inteiros!
+  const loadDhcp = useCallback(async () => {
+    const idAtual = ++reqDhcpId.current;
+    try {
+      const dh = await api.dhcpLeases({ q: dhcpBusca, page: dhcpPage, pageSize: 10 });
+      if (idAtual !== reqDhcpId.current) return;
+      setDhcp(dh.items || []);
+      setDhcpMeta(metaOf(dh));
+      setErroPesado('');
+    } catch (err) {
+      if (idAtual !== reqDhcpId.current) return;
+      falhasPesado.current += 1;
+      if (!err.deRede || falhasPesado.current >= FALHAS_PRA_AVISAR) {
+        setErroPesado(err.message || 'Falha ao buscar leases DHCP');
+      }
+    }
+  }, [dhcpBusca, dhcpPage]);
+
+  useEffect(() => {
+    loadDhcp();
+  }, [loadDhcp]);
 
   // CPU, memoria, voltagem e temperatura mudam a cada segundo: vale olhar de
   // perto. Sao duas consultas ao historico que o servidor ja tem gravado.
@@ -66,26 +93,21 @@ export default function SystemScreen() {
       setResource(sys.resource);
       setHealth(sys.health || {});
       setHistory(hist.items || []);
+      falhasRapido.current = 0;
       setErroRapido('');
     } catch (err) {
-      setErroRapido(err.message || 'Falha ao carregar os recursos do CCR');
+      falhasRapido.current += 1;
+      if (!err.deRede || falhasRapido.current >= FALHAS_PRA_AVISAR) {
+        setErroRapido(err.message || 'Falha ao carregar os recursos do CCR');
+      }
     }
   }, []);
 
-  // Estas seis vao ao CCR buscar listas grandes: sao 1081 interfaces, os leases
-  // de DHCP, as filas, o wireless e uma semana de log. Estavam no mesmo ciclo
-  // de 15s das de cima, 32 requisicoes por minuto, com a tela aberta
-  // esquecida num celular. E nada disso muda em 15 segundos: uma interface
-  // entra ou sai, um lease renova de hora em hora.
-  //
-  // Passam a cada 90s. Trocar de pagina, buscar ou filtrar topico recria este
-  // callback, entao o useFocusEffect abaixo roda de novo e busca na hora: quem
-  // esta mexendo na tela nao espera.
+  // Estas cinco vao ao CCR/banco buscar listas grandes. Passam a cada 90s.
   const loadPesado = useCallback(async () => {
     try {
-      const [ifaces, dh, q, wl, lg, topics] = await Promise.all([
+      const [ifaces, q, wl, lg, topics] = await Promise.all([
         api.interfaces({ page: interfacesPage, pageSize: 10 }),
-        api.dhcpLeases({ q: dhcpBusca, page: dhcpPage, pageSize: 10 }),
         api.queues({ page: queuesPage, pageSize: 10 }),
         api.wireless({ page: 1, pageSize: 10 }),
         api.logs({ topic: logTopic, hours: 168, page: logsPage, pageSize: 12 }),
@@ -93,19 +115,21 @@ export default function SystemScreen() {
       ]);
       setInterfaces(ifaces.items || []);
       setInterfacesMeta(metaOf(ifaces));
-      setDhcp(dh.items || []);
-      setDhcpMeta(metaOf(dh));
       setQueues(q.items || []);
       setQueuesMeta(metaOf(q));
       setWireless(wl.items || []);
       setLogs(lg.items || []);
       setLogsMeta(metaOf(lg));
       setLogTopics(topics.items || []);
+      falhasPesado.current = 0;
       setErroPesado('');
     } catch (err) {
-      setErroPesado(err.message || 'Falha ao carregar interfaces, DHCP, filas e log');
+      falhasPesado.current += 1;
+      if (!err.deRede || falhasPesado.current >= FALHAS_PRA_AVISAR) {
+        setErroPesado(err.message || 'Falha ao carregar interfaces, DHCP, filas e log');
+      }
     }
-  }, [interfacesPage, dhcpBusca, dhcpPage, queuesPage, logsPage, logTopic]);
+  }, [interfacesPage, queuesPage, logsPage, logTopic]);
 
   useFocusEffect(
     useCallback(() => {

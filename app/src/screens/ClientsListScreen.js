@@ -50,10 +50,13 @@ export default function ClientsListScreen({ mode }) {
   const [oltsPorId, setOltsPorId] = useState({});
   const focused = useRef(true);
   const falhasSeguidas = useRef(0);
+  const reqId = useRef(0);
 
   const load = useCallback(async () => {
+    const idAtual = ++reqId.current;
     try {
       const aplicar = (res) => {
+        if (idAtual !== reqId.current) return;
         setRows(res.items || []);
         setMeta({
           page: res.page || 1,
@@ -73,38 +76,36 @@ export default function ClientsListScreen({ mode }) {
         chavesCarregadas.current.has(chaveCache)
           ? null
           : (guardado, salvoEm) => {
+              if (idAtual !== reqId.current) return;
               aplicar(guardado);
               setStaleAt(salvoEm);
               setLoading(false);
             }
       );
+      if (idAtual !== reqId.current) return;
       setStaleAt(stale ? savedAt : null);
       aplicar(res);
       chavesCarregadas.current.add(chaveCache);
       falhasSeguidas.current = 0;
       setError('');
     } catch (err) {
+      if (idAtual !== reqId.current) return;
       // Tropeço de rede nao merece banner vermelho na primeira vez. O
-      // request() ja insiste tres vezes numa falha instantanea; se mesmo assim
-      // falhou, o ciclo de 5s tenta de novo logo. Mostrar na hora era o que
-      // fazia aparecer "Nao foi possivel falar com o servidor" e, segundos
-      // depois, a lista cheia, como se o app estivesse quebrado.
-      //
-      // Erro do servidor (HTTP 500, 403) aparece na hora: ai nao e tropeço,
-      // insistir nao resolve e quem esta olhando precisa saber.
+      // request() ja insiste tres vezes numa falha; se mesmo assim falhou,
+      // o proximo ciclo tenta de novo logo.
       falhasSeguidas.current += 1;
       if (!err.deRede || falhasSeguidas.current >= FALHAS_PRA_AVISAR) {
         setError(err.message || 'Falha ao carregar');
       }
     } finally {
-      setLoading(false);
+      if (idAtual === reqId.current) setLoading(false);
     }
   }, [mode, buscaFirme, page]);
 
   // 350ms depois da ultima tecla. Curto o bastante pra parecer imediato, longo
   // o bastante pra uma palavra inteira virar uma requisicao so.
   useEffect(() => {
-    const t = setTimeout(() => setBuscaFirme(query), 350);
+    const t = setTimeout(() => setBuscaFirme(query.trim()), 350);
     return () => clearTimeout(t);
   }, [query]);
 

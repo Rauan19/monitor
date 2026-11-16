@@ -49,12 +49,13 @@ function erroDeRede(err) {
 // lista aparecia. Quem usa via um erro que se curava sozinho, e concluia,
 // com razao, que o app esta lento.
 const TENTATIVAS_EXTRA = 2;
-const ESPERA_ENTRE_TENTATIVAS_MS = [400, 1200];
+const ESPERA_ENTRE_TENTATIVAS_MS = [300, 900];
 
-// Abaixo disso a falha foi imediata, ou seja o aparelho nem conseguiu abrir a
-// conexao. E esse caso que vale insistir. Uma falha que demorou e servidor
-// lento ou rede ruim de verdade, e repetir so faria a pessoa esperar o dobro.
-const FALHA_IMEDIATA_MS = 2000;
+// Abaixo disso a falha foi de socket/rede (ex: socket keep-alive fechado no
+// meio do caminho ou oscilacao de 4G/Wi-Fi, que no Android costuma levar de
+// 2s a 5s pra estourar), e abrir uma nova tentativa resolve na hora. Acima
+// disso ja encosta no timeout de 12s, entao nao vale somar outra espera longa.
+const FALHA_REPETIVEL_MS = 7000;
 
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -91,9 +92,9 @@ async function request(path, options = {}) {
       break;
     } catch (err) {
       const erro = erroDeRede(err);
-      const foiImediata = Date.now() - inicio < FALHA_IMEDIATA_MS;
+      const repetivel = Date.now() - inicio < FALHA_REPETIVEL_MS;
       const aindaTem = tentativa < TENTATIVAS_EXTRA;
-      if (!podeRepetir || !foiImediata || !aindaTem) throw erro;
+      if (!podeRepetir || !repetivel || !aindaTem) throw erro;
       await espera(ESPERA_ENTRE_TENTATIVAS_MS[tentativa]);
     } finally {
       clearTimeout(prazo);

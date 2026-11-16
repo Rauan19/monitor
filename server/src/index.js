@@ -48,6 +48,15 @@ const server = app.listen(config.port, config.host, () => {
   aquecerCacheAgregacao();
 });
 
+// O padrao do Node para keepAliveTimeout e 5s, exatamente a faixa em que o app
+// faz polling (5s-10s) ou em que o operador para de digitar e faz uma busca.
+// Quando o Node fecha o socket TCP bem na hora em que o OkHttp do Android
+// reutiliza a conexao do pool, o fetch falha com "Network request failed"
+// ("Nao foi possivel falar com o servidor"). Com 65s o socket nao morre no
+// meio da navegacao nem entre ciclos do poller.
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+
 async function shutdown() {
   console.log('[server] encerrando...');
   stopPoller();

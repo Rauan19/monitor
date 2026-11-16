@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { colors, radius } from '../theme';
@@ -9,6 +9,7 @@ import MiniBars from '../components/MiniBars';
 import { formatBps } from '../format';
 import { withCache } from '../cache';
 
+const FALHAS_PRA_AVISAR = 2;
 const emptyMeta = { page: 1, pageSize: 15, total: 0, pages: 1 };
 const metaOf = (res) => ({ page: res.page || 1, pageSize: res.pageSize || 15, total: res.total || 0, pages: res.pages || 1 });
 
@@ -21,6 +22,7 @@ export default function StatsScreen() {
   const [slaMeta, setSlaMeta] = useState(emptyMeta);
   const [slaPage, setSlaPage] = useState(1);
   const [slaQuery, setSlaQuery] = useState('');
+  const [slaBusca, setSlaBusca] = useState('');
 
   const [slaByPort, setSlaByPort] = useState([]);
   const [hourlyLoad, setHourlyLoad] = useState([]);
@@ -35,14 +37,51 @@ export default function StatsScreen() {
   // Chaves de cache que ja receberam dado fresco. Ver o comentario no
   // callback do withCache.
   const chavesCarregadas = useRef(new Set());
+  const falhasSeguidas = useRef(0);
+  const reqSlaId = useRef(0);
+
+  useEffect(() => {
+    const t = setTimeout(() => setSlaBusca(slaQuery.trim()), 350);
+    return () => clearTimeout(t);
+  }, [slaQuery]);
+
+  useEffect(() => {
+    setSlaPage(1);
+  }, [slaBusca]);
+
+  // Busca de SLA separada do resto da tela: digitar no campo "Buscar cliente"
+  // antes disparava 6 requisicoes pesadas a cada tecla digitada!
+  const loadSla = useCallback(async () => {
+    const idAtual = ++reqSlaId.current;
+    try {
+      const chaveCache = `stats:sla:${slaBusca}:${slaPage}`;
+      const { data: slaData } = await withCache(
+        chaveCache,
+        () => api.sla({ days: 30, q: slaBusca, page: slaPage, pageSize: 15 })
+      );
+      if (idAtual !== reqSlaId.current) return;
+      setSla(slaData.items || []);
+      setSlaMeta(metaOf(slaData));
+      falhasSeguidas.current = 0;
+      setError('');
+    } catch (err) {
+      if (idAtual !== reqSlaId.current) return;
+      falhasSeguidas.current += 1;
+      if (!err.deRede || falhasSeguidas.current >= FALHAS_PRA_AVISAR) {
+        setError(err.message || 'Falha ao carregar SLA');
+      }
+    }
+  }, [slaBusca, slaPage]);
+
+  useEffect(() => {
+    loadSla();
+  }, [loadSla]);
 
   const load = useCallback(async () => {
     try {
       const tzOffsetMinutes = new Date().getTimezoneOffset();
-      const aplicar = ({ tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes }) => {
+      const aplicar = ({ tc, hourly, anomaliesRes, queueUsageRes, slaPortRes }) => {
         setTopConsumers(tc.items || []);
-        setSla(slaData.items || []);
-        setSlaMeta(metaOf(slaData));
         setHourlyLoad(
           (hourly.items || []).map((h) => ({
             value: h.avgDownBps + h.avgUpBps,
@@ -55,24 +94,19 @@ export default function StatsScreen() {
         setSlaByPort(slaPortRes.items || []);
       };
 
-      const chaveCache = `stats:${topLimit}:${slaQuery}:${slaPage}:${queueUsagePage}`;
+      const chaveCache = `stats:${topLimit}:${queueUsagePage}`;
       const { data: pacote, stale, savedAt } = await withCache(
         chaveCache,
         async () => {
-          const [tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes] = await Promise.all([
+          const [tc, hourly, anomaliesRes, queueUsageRes, slaPortRes] = await Promise.all([
             api.topConsumers(24, topLimit),
-            api.sla({ days: 30, q: slaQuery, page: slaPage, pageSize: 15 }),
             api.hourlyLoad(7, tzOffsetMinutes),
             api.anomalies(168),
             api.queueUsage({ hours: 24, page: queueUsagePage, pageSize: 10 }),
             api.slaByPort(30),
           ]);
-          return { tc, slaData, hourly, anomaliesRes, queueUsageRes, slaPortRes };
+          return { tc, hourly, anomaliesRes, queueUsageRes, slaPortRes };
         },
-        // Mostra o guardado antes da rede responder so quando a tela ainda nao
-        // tem o dado DESTA chave: primeira carga, ou o usuario trocou de pagina,
-        // busca ou filtro. Numa atualizacao da mesma chave isso fazia o aviso de
-        // "desatualizado" entrar e sair a cada ciclo, e a tela tremia.
         chavesCarregadas.current.has(chaveCache)
           ? null
           : (guardado, salvoEm) => {
@@ -83,11 +117,15 @@ export default function StatsScreen() {
       setStaleAt(stale ? savedAt : null);
       aplicar(pacote);
       chavesCarregadas.current.add(chaveCache);
+      falhasSeguidas.current = 0;
       setError('');
     } catch (err) {
-      setError(err.message || 'Falha ao carregar estatísticas');
+      falhasSeguidas.current += 1;
+      if (!err.deRede || falhasSeguidas.current >= FALHAS_PRA_AVISAR) {
+        setError(err.message || 'Falha ao carregar estatísticas');
+      }
     }
-  }, [topLimit, slaQuery, slaPage, queueUsagePage]);
+  }, [topLimit, queueUsagePage]);
 
   useFocusEffect(
     useCallback(() => {

@@ -1309,8 +1309,13 @@ export function listBandwidthHistory({ client, hours = 24 } = {}) {
 export function getTopConsumers({ hours = 24, limit = 10 } = {}) {
   // Ordena por expressao sobre agregados, entao precisa agrupar todos os
   // clientes antes de escolher os primeiros: o indice nao evita esse trabalho.
-  // Media de 24h nao muda em 2 min, entao vale memoizar.
-  return memo(`topConsumers:${hours}:${limit}`, () => calcTopConsumers({ hours, limit }));
+  // Cacheia os top 50 de uma vez e fatia em memoria (evita varrer
+  // bandwidth_samples duas vezes para limit=5 na Home e limit=10 em Stats).
+  const maxLimit = Math.max(50, Number(limit) || 10);
+  const lista = memo(`topConsumers:${hours}:${maxLimit}`, () =>
+    calcTopConsumers({ hours, limit: maxLimit })
+  );
+  return lista.slice(0, Number(limit) || 10);
 }
 
 function calcTopConsumers({ hours, limit }) {
@@ -1394,7 +1399,7 @@ function calcBandwidthBaseline({ hours }) {
 // perceptivel de um minuto pro outro, logo nao ha razao pra recalcular a cada
 // requisicao. Com varias telas consultando a cada 10s isso somava segundos de
 // CPU por minuto no servidor.
-const TTL_AGREGACAO_MS = Number(process.env.AGGREGATE_CACHE_MS || 120000);
+const TTL_AGREGACAO_MS = Number(process.env.AGGREGATE_CACHE_MS || 300000);
 // Acima do TTL mas abaixo deste limite, devolve o valor guardado NA HORA (0ms)
 // e agenda a atualizacao pro proximo ciclo do event loop (stale-while-revalidate).
 // Assim a primeira consulta ao abrir o app nunca fica pendurada recalculando
@@ -1444,10 +1449,8 @@ export function limparCacheAgregacao() {
  */
 export function aquecerCacheAgregacao() {
   const tarefas = [
-    () => getTopConsumers({ hours: 24, limit: 5 }),
     () => getTopConsumers({ hours: 24, limit: 10 }),
     () => getHourlyLoad({ days: 7, tzOffsetMinutes: 180 }),
-    () => getHourlyLoad({ days: 7, tzOffsetMinutes: 0 }),
     () => getBandwidthBaseline({ hours: 168 }),
     () => computeSlaRows(30),
     () => listLogTopics(),
@@ -1469,10 +1472,20 @@ export function aquecerCacheAgregacao() {
 }
 
 export function getHourlyLoad({ days = 7, tzOffsetMinutes = 0 } = {}) {
-  return memo(`hourlyLoad:${days}:${tzOffsetMinutes}`, () => calcHourlyLoad({ days, tzOffsetMinutes }));
+  // A consulta SQL agrupa em UTC e nao depende do fuso; so o deslocamento dos
+  // 24 baldes depende de tzOffsetMinutes. Cachear a consulta bruta uma unica
+  // vez evita varrer 440 mil linhas duas vezes (tz=0 e tz=180).
+  const buckets = memo(`hourlyLoadRaw:${days}`, () => calcHourlyLoadBuckets({ days }));
+  const shift = -Math.round(Number(tzOffsetMinutes) || 0) / 60;
+  return buckets
+    .map((b, utcHour) => ({
+      ...b,
+      hour: ((utcHour + shift) % 24 + 24) % 24,
+    }))
+    .sort((a, b) => a.hour - b.hour);
 }
 
-function calcHourlyLoad({ days, tzOffsetMinutes }) {
+function calcHourlyLoadBuckets({ days }) {
   const database = getDb();
   const since = daysAgoIso(days);
   const rows = database
@@ -1488,11 +1501,8 @@ function calcHourlyLoad({ days, tzOffsetMinutes }) {
     )
     .all(since);
 
-  // tzOffsetMinutes é o valor de Date.prototype.getTimezoneOffset() do navegador
-  // (minutos a somar ao horário local pra chegar em UTC, positivo a oeste de UTC).
-  const shift = -Math.round(Number(tzOffsetMinutes) || 0) / 60;
   const byHour = new Map(rows.map((r) => [Number(r.hour), r]));
-  const buckets = Array.from({ length: 24 }, (_, hour) => {
+  return Array.from({ length: 24 }, (_, hour) => {
     const r = byHour.get(hour);
     return {
       hour,
@@ -1501,11 +1511,6 @@ function calcHourlyLoad({ days, tzOffsetMinutes }) {
       samples: r ? r.samples : 0,
     };
   });
-
-  return buckets.map((b, utcHour) => ({
-    ...b,
-    hour: ((utcHour + shift) % 24 + 24) % 24,
-  })).sort((a, b) => a.hour - b.hour);
 }
 
 export function getAddressNameMap() {
