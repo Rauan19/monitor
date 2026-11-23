@@ -17,12 +17,15 @@ process.env.DB_PATH = path.join(tmp, 'teste.db');
 process.env.OUTAGE_ALERT_CONFIRM_MINUTES = '0.05'; // 3 segundos
 process.env.OUTAGE_ALERT_COOLDOWN_MINUTES = '10';
 process.env.OUTAGE_ALERT_GAP_MS = '0';
+process.env.LINK_ALERT_CONFIRM_MINUTES = '0.03'; // ~1.8 segundos
 process.env.MIKROTIK_HOST = '127.0.0.1';
 process.env.AUTH_PASSWORD = 'x';
 process.env.AUTH_SECRET = 'y'.repeat(32);
 
-const { getDb, upsertOnlineSessions, listNotifications } = await import('../src/db/index.js');
-const { checkCorrelatedOutages } = await import('../src/poller/index.js');
+const { getDb, upsertOnlineSessions, listNotifications, addMonitoredLink, setNote, listAll } = await import('../src/db/index.js');
+const { checkCorrelatedOutages, checkInactiveClients } = await import('../src/poller/index.js');
+const { checkLinks, resetLinkState } = await import('../src/poller/links.js');
+const { mikrotik } = await import('../src/mikrotik/client.js');
 
 const db = getDb();
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -100,6 +103,74 @@ const tipos = listNotifications({ page: 1, pageSize: 10 })
   .sort()
   .join(',');
 conferir('um alerta de porta e um de regiao', tipos, 'outage_port,outage_region');
+
+// --- Cenario 5: clientes antigos ja offline ha dias NAO disparam alerta falso ---
+db.prepare(`DELETE FROM notifications`).run();
+const PORTA_ANTIGA = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
+online([...TODOS, ...SOLTOS, ...PORTA_ANTIGA]);
+db.prepare(`UPDATE sessions SET olt_id = 1, ont_port = 7 WHERE name IN ('p1','p2','p3','p4','p5','p6')`).run();
+// p1, p2, p3 cairam ha 3 dias (clientes velhos/cancelados)
+const tresDiasAtras = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+db.prepare(`UPDATE sessions SET is_online = 0, disconnected_at = ?, inactive_notified_at = ? WHERE name IN ('p1','p2','p3')`).run(
+  tresDiasAtras,
+  tresDiasAtras
+);
+// Agora p4, p5, p6 piscam rapido (caem e voltam em 1s)
+online([...TODOS, ...SOLTOS]); // p4, p5, p6 acabaram de cair
+checkCorrelatedOutages(); // poe porta 7 em observacao
+online([...TODOS, ...SOLTOS, 'p4', 'p5', 'p6']); // p4, p5, p6 ja voltaram! (so p1,p2,p3 antigos continuam offline)
+await esperar(3200);
+checkCorrelatedOutages();
+await esperar(200);
+conferir('clientes antigos offline nao confirmam piscada como queda em massa', pushes(), 0);
+
+// --- Cenario 6: cliente inativo por 48h notifica 1 vez e reseta se reconectar ---
+db.prepare(`DELETE FROM notifications`).run();
+const anaKey = db.prepare(`SELECT session_key FROM sessions WHERE name = 'ana'`).get().session_key;
+setNote(anaKey, 'Cliente viajou');
+conferir('busca acha cliente pela nota opcional', listAll({ q: 'viajou' }).total, 1);
+const cinquentaHorasAtras = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
+db.prepare(`UPDATE sessions SET is_online = 0, disconnected_at = ?, inactive_notified_at = NULL WHERE name = 'ana'`).run(
+  cinquentaHorasAtras
+);
+checkInactiveClients();
+await esperar(200);
+conferir('cliente inativo ha 48h gera 1 notificacao', pushes(), 1);
+const notifInativo = listNotifications({ page: 1, pageSize: 1 }).items[0];
+conferir('tipo da notificacao de inativo', notifInativo.type, 'client_inactive');
+conferir('notificacao traz a nota opcional do cliente', notifInativo.data?.note, 'Cliente viajou');
+checkInactiveClients();
+await esperar(200);
+conferir('nao repete notificacao do mesmo cliente inativo', pushes(), 1);
+
+// --- Cenario 7: link de transporte espera confirmacao (3 min) antes de alertar ---
+db.prepare(`DELETE FROM notifications`).run();
+resetLinkState();
+addMonitoredLink('ether1-uplink', 'Operadora');
+let estadoLink = true;
+mikrotik.getInterfaces = async () => [
+  { name: 'ether1-uplink', type: 'ether', running: estadoLink, disabled: false, rxByte: 1e12, txByte: 1e12, linkDowns: 0 },
+];
+await checkLinks(); // 1a leitura inicial
+estadoLink = false;
+await checkLinks(); // caiu agora -> entra em espera
+await esperar(200);
+conferir('link que acabou de cair nao notifica antes dos 3 min', pushes(), 0);
+estadoLink = true;
+await checkLinks(); // voltou rapido -> piscada curta, zero pushes
+await esperar(2000);
+conferir('link que piscou e voltou antes do prazo nao notifica', pushes(), 0);
+
+estadoLink = false;
+await checkLinks(); // caiu de verdade
+await esperar(2000);
+await checkLinks(); // passou do prazo de confirmacao -> agora notifica queda
+await esperar(200);
+conferir('link que persiste caido notifica link_down', pushes(), 1);
+estadoLink = true;
+await checkLinks(); // voltou depois de ter notificado -> notifica link_up
+await esperar(200);
+conferir('link que voltou apos queda confirmada notifica link_up', pushes(), 2);
 
 // No Windows o arquivo fica travado enquanto a conexao estiver aberta, e
 // limpar o temporario nao e o que o teste prova: nao pode derrubar o resultado.

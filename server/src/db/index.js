@@ -298,6 +298,28 @@ export function getDb() {
     }
   }
 
+  const hasInactiveNotified = db
+    .prepare(`SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'inactive_notified_at'`)
+    .get();
+  if (!hasInactiveNotified) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN inactive_notified_at TEXT`);
+    // Marca quem ja estava offline ha mais de 48h antes da migracao pra nao
+    // despejar dezenas de pushes antigos de uma vez no primeiro boot.
+    const corte48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    const agora = new Date().toISOString();
+    db.prepare(
+      `UPDATE sessions SET inactive_notified_at = ?
+       WHERE is_online = 0 AND disconnected_at IS NOT NULL AND disconnected_at <= ?`
+    ).run(agora, corte48h);
+  }
+
+  const hasNote = db
+    .prepare(`SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'note'`)
+    .get();
+  if (!hasNote) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
+  }
+
   return db;
 }
 
@@ -587,6 +609,15 @@ export function setAlias(sessionKey, alias) {
   return database.prepare(`SELECT session_key, alias FROM sessions WHERE session_key = ?`).get(sessionKey);
 }
 
+export function setNote(sessionKey, note) {
+  const database = getDb();
+  const clean = (note || '').trim();
+  database
+    .prepare(`UPDATE sessions SET note = ? WHERE session_key = ?`)
+    .run(clean || null, sessionKey);
+  return database.prepare(`SELECT session_key, note FROM sessions WHERE session_key = ?`).get(sessionKey);
+}
+
 export function setLocation(sessionKey, { region, city, street, neighborhood, lat, lng } = {}) {
   const database = getDb();
   const clean = (v) => {
@@ -723,7 +754,7 @@ export function upsertOnlineSessions(clients) {
   const updateOnline = database.prepare(`
     UPDATE sessions
     SET name = ?, address = ?, caller_id = ?, service = ?, uptime = ?, profile = ?,
-        last_seen_at = ?, disconnected_at = NULL, is_online = 1
+        last_seen_at = ?, disconnected_at = NULL, inactive_notified_at = NULL, is_online = 1
     WHERE session_key = ?
   `);
   // Clientes que ja estavam online no ciclo anterior e nao mudaram IP/MAC/perfil:
@@ -876,10 +907,11 @@ function normalizePage(page, pageSize, total) {
 function searchClause(q, params) {
   if (!q) return '';
   const like = `%${q}%`;
-  params.push(like, like, like, like);
+  params.push(like, like, like, like, like);
   return ` AND (
     name LIKE ? OR
     IFNULL(alias, '') LIKE ? OR
+    IFNULL(note, '') LIKE ? OR
     IFNULL(address, '') LIKE ? OR
     IFNULL(caller_id, '') LIKE ?
   )`;
@@ -896,7 +928,7 @@ export function listOnline({ page = 1, pageSize = 20, q = '' } = {}) {
   const items = database
     .prepare(
       `
-      SELECT session_key, name, alias, address, caller_id, service, uptime, profile, ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
+      SELECT session_key, name, alias, note, address, caller_id, service, uptime, profile, ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
              first_seen_at, last_seen_at,
              (SELECT pl.label FROM port_labels pl
                 WHERE pl.olt_id = COALESCE(sessions.olt_id, 0) AND pl.port = sessions.ont_port) AS port_label
@@ -930,7 +962,7 @@ export function listDisconnected({
   const items = database
     .prepare(
       `
-      SELECT session_key, name, alias, address, caller_id, service, uptime, profile,
+      SELECT session_key, name, alias, note, address, caller_id, service, uptime, profile,
              ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
              first_seen_at, last_seen_at, disconnected_at, is_online,
              (SELECT pl.label FROM port_labels pl
@@ -966,8 +998,8 @@ export function listEvents({
 
   let joinCount = '';
   if (q) {
-    // A busca tambem acha pelo apelido e pelo nome da porta, que e a regiao:
-    // procurar "Centro" no historico passa a trazer as quedas daquela porta.
+    // A busca tambem acha pelo apelido, nota e pelo nome da porta, que e a regiao:
+    // procurar "Centro" ou "viajou" no historico passa a trazer as quedas.
     // Usa LEFT JOIN em vez de subquery correlacionada por linha.
     joinCount = `
       LEFT JOIN sessions s ON s.session_key = e.session_key
@@ -978,10 +1010,11 @@ export function listEvents({
       IFNULL(e.address, '') LIKE ? OR
       IFNULL(e.caller_id, '') LIKE ? OR
       IFNULL(s.alias, '') LIKE ? OR
+      IFNULL(s.note, '') LIKE ? OR
       IFNULL(pl.label, '') LIKE ?
     )`;
     const like = `%${q}%`;
-    params.push(like, like, like, like, like);
+    params.push(like, like, like, like, like, like);
   }
 
   // Sem busca (q vazio), nao faz LEFT JOIN no COUNT(*): o indice composto
@@ -994,7 +1027,7 @@ export function listEvents({
     .prepare(
       `
       SELECT e.id, e.session_key, e.name, e.address, e.caller_id, e.event_type, e.created_at,
-             s.alias, s.ont_port, s.olt_id, s.is_online,
+             s.alias, s.note, s.ont_port, s.olt_id, s.is_online,
              s.loc_region, s.loc_neighborhood, s.loc_city,
              o.name AS olt_name,
              pl.label AS port_label
@@ -1026,11 +1059,12 @@ export function listAll({
     where += ` AND (
       name LIKE ? OR
       IFNULL(alias, '') LIKE ? OR
+      IFNULL(note, '') LIKE ? OR
       IFNULL(address, '') LIKE ? OR
       IFNULL(caller_id, '') LIKE ?
     )`;
     const like = `%${q}%`;
-    params.push(like, like, like, like);
+    params.push(like, like, like, like, like);
   }
 
   if (port) {
@@ -1045,7 +1079,7 @@ export function listAll({
   const items = database
     .prepare(
       `
-      SELECT session_key, name, alias, address, caller_id, service, uptime, profile, ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
+      SELECT session_key, name, alias, note, address, caller_id, service, uptime, profile, ont_port, olt_id, loc_region, loc_city, loc_street, loc_neighborhood,
              first_seen_at, last_seen_at, disconnected_at, is_online,
              (SELECT pl.label FROM port_labels pl
                 WHERE pl.olt_id = COALESCE(sessions.olt_id, 0) AND pl.port = sessions.ont_port) AS port_label
@@ -1076,18 +1110,21 @@ function daysAgoIso(days) {
  * sairam da janela. Aqui a pergunta e outra e independe de janela: "desse
  * grupo, quantos continuam fora agora?".
  */
-export function contarQuedaAtual({ oltId = null, port = null, region = null } = {}) {
+export function contarQuedaAtual({ oltId = null, port = null, region = null, since = null } = {}) {
   const database = getDb();
+  const filtroDesde = since ? ` AND disconnected_at >= ?` : '';
+
   if (region != null) {
     const total = database
       .prepare(`SELECT COUNT(*) AS c FROM sessions WHERE loc_region = ?`)
       .get(region).c;
+    const params = since ? [region, since] : [region];
     const linhas = database
       .prepare(
         `SELECT COALESCE(alias, name) AS nome FROM sessions
-         WHERE loc_region = ? AND is_online = 0`
+         WHERE loc_region = ? AND is_online = 0${filtroDesde}`
       )
-      .all(region);
+      .all(...params);
     return { count: linhas.length, total, names: linhas.map((l) => l.nome) };
   }
 
@@ -1097,13 +1134,47 @@ export function contarQuedaAtual({ oltId = null, port = null, region = null } = 
        WHERE ont_port = ? AND (olt_id = ? OR (olt_id IS NULL AND ? IS NULL))`
     )
     .get(port, oltId, oltId).c;
+  const params = since ? [port, oltId, oltId, since] : [port, oltId, oltId];
   const linhas = database
     .prepare(
       `SELECT COALESCE(alias, name) AS nome FROM sessions
-       WHERE ont_port = ? AND (olt_id = ? OR (olt_id IS NULL AND ? IS NULL)) AND is_online = 0`
+       WHERE ont_port = ? AND (olt_id = ? OR (olt_id IS NULL AND ? IS NULL)) AND is_online = 0${filtroDesde}`
     )
-    .all(port, oltId, oltId);
+    .all(...params);
   return { count: linhas.length, total, names: linhas.map((l) => l.nome) };
+}
+
+/**
+ * Lista clientes que completaram `hours` (padrao 48h = 2 dias) offline sem
+ * reconectar e que ainda nao geraram notificacao de inatividade neste ciclo de
+ * queda.
+ */
+export function listarClientesInativosParaNotificar({ hours = 48 } = {}) {
+  const database = getDb();
+  const corte = hoursAgoIso(hours);
+  return database
+    .prepare(
+      `SELECT s.session_key, s.name, s.alias, s.note, s.address, s.ont_port, s.olt_id,
+              s.loc_region, s.loc_neighborhood, s.loc_city, s.disconnected_at,
+              o.name AS olt_name,
+              pl.label AS port_label
+       FROM sessions s
+       LEFT JOIN olts o ON o.id = s.olt_id
+       LEFT JOIN port_labels pl ON pl.olt_id = COALESCE(s.olt_id, 0) AND pl.port = s.ont_port
+       WHERE s.is_online = 0
+         AND s.disconnected_at IS NOT NULL
+         AND s.disconnected_at <= ?
+         AND s.inactive_notified_at IS NULL
+       ORDER BY s.disconnected_at ASC`
+    )
+    .all(corte);
+}
+
+export function marcarClienteInativoNotificado(sessionKey) {
+  const database = getDb();
+  database
+    .prepare(`UPDATE sessions SET inactive_notified_at = ? WHERE session_key = ?`)
+    .run(new Date().toISOString(), sessionKey);
 }
 
 export function getRecentDisconnectGroups({ minutes = 5, threshold = 3 } = {}) {

@@ -1,3 +1,4 @@
+import { config } from '../config.js';
 import { mikrotik } from '../mikrotik/client.js';
 import { listMonitoredLinks, saveLinkEvent, semearLinksSeNecessario } from '../db/index.js';
 import { enqueueNotification } from '../notifyQueue.js';
@@ -19,6 +20,11 @@ import { enqueueNotification } from '../notifyQueue.js';
 // transicoes, aqui basta saber o que mudou de um ciclo pro outro.
 const anterior = new Map(); // name -> { running, linkDowns }
 
+// Links que cairam e estao aguardando o tempo de confirmacao (padrao 3 min)
+// antes de disparar push. Evita notificar piscadas curtas de interface/radio.
+// name -> { desde, label, linkDowns, alertou }
+const emQueda = new Map();
+
 let primeiraLeitura = true;
 
 export async function checkLinks() {
@@ -36,6 +42,8 @@ export async function checkLinks() {
   if (!vigiados.length) return; // nada cadastrado, nada a fazer
 
   const porNome = new Map(vigiados.map((l) => [l.name, l.label]));
+  const agoraMs = Date.now();
+  const confirmMs = (config.linkAlert?.confirmMinutes ?? 3) * 60 * 1000;
 
   for (const iface of interfaces) {
     if (!porNome.has(iface.name)) continue;
@@ -53,27 +61,52 @@ export async function checkLinks() {
 
     if (antes.running && !iface.running) {
       saveLinkEvent({ name: iface.name, label, eventType: 'down', linkDowns: iface.linkDowns });
-      enqueueNotification(
-        {
-          title: `🔴 Link caiu: ${desc}`,
-          body: `A interface ${iface.name} parou de responder no CCR.`,
-          data: { type: 'link_down', name: iface.name, label: label || null },
-        },
-        { priority: true }
-      );
+      emQueda.set(iface.name, {
+        desde: agoraMs,
+        label,
+        linkDowns: iface.linkDowns,
+        alertou: false,
+      });
+    }
+
+    if (!iface.running) {
+      const queda = emQueda.get(iface.name);
+      if (queda && !queda.alertou && agoraMs - queda.desde >= confirmMs) {
+        queda.alertou = true;
+        const minutosFora = Math.max(1, Math.round((agoraMs - queda.desde) / 60000));
+        enqueueNotification(
+          {
+            title: `🔴 Link caiu: ${desc}`,
+            body: `A interface ${iface.name} está sem responder no CCR há ${minutosFora} min.`,
+            data: {
+              type: 'link_down',
+              name: iface.name,
+              label: label || null,
+              minutesDown: minutosFora,
+            },
+          },
+          { priority: true }
+        );
+      }
       continue;
     }
 
     if (!antes.running && iface.running) {
       saveLinkEvent({ name: iface.name, label, eventType: 'up', linkDowns: iface.linkDowns });
-      enqueueNotification(
-        {
-          title: `✅ Link voltou: ${desc}`,
-          body: `A interface ${iface.name} voltou a responder.`,
-          data: { type: 'link_up', name: iface.name, label: label || null },
-        },
-        { priority: true }
-      );
+      const queda = emQueda.get(iface.name);
+      emQueda.delete(iface.name);
+      // So avisa que o link voltou se a queda durou os 3 min e chegou a ser
+      // notificada. Se voltou antes disso, foi piscada curta.
+      if (queda?.alertou) {
+        enqueueNotification(
+          {
+            title: `✅ Link voltou: ${desc}`,
+            body: `A interface ${iface.name} voltou a responder.`,
+            data: { type: 'link_up', name: iface.name, label: label || null },
+          },
+          { priority: true }
+        );
+      }
       continue;
     }
 
@@ -92,5 +125,6 @@ export async function checkLinks() {
 /** Usado pelos testes pra comecar do zero. */
 export function resetLinkState() {
   anterior.clear();
+  emQueda.clear();
   primeiraLeitura = true;
 }

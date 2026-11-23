@@ -1,9 +1,10 @@
-import { useCallback, useState, useRef } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useEffect, useState, useRef } from 'react';
+import { Alert, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { colors, radius } from '../theme';
 import { api } from '../api';
 import { Badge, EmptyState, ErrorBanner, LoadingState, Pager, StaleBanner } from '../components/common';
+import PrimaryButton from '../components/PrimaryButton';
 import { Ionicons } from '@expo/vector-icons';
 import { formatDate, relativeAgo } from '../format';
 import { withCache } from '../cache';
@@ -14,6 +15,9 @@ const emptyMeta = { page: 1, pageSize: PAGE_SIZE, total: 0, pages: 1 };
 const KINDS = {
   outage_port: { label: 'Porta', tone: 'warn' },
   outage_region: { label: 'Região', tone: 'warn' },
+  link_down: { label: 'Link caiu', tone: 'warn' },
+  link_up: { label: 'Link voltou', tone: 'ok' },
+  client_inactive: { label: 'Inativo 48h', tone: 'amber' },
   ccr_down: { label: 'CCR fora do ar', tone: 'warn' },
   ccr_up: { label: 'CCR voltou', tone: 'ok' },
   test: { label: 'Teste', tone: 'accent' },
@@ -77,12 +81,33 @@ function Linha({ label, value }) {
 }
 
 /** Ficha completa do alerta: tudo que veio no payload, sem truncar nomes. */
-function DetalheAlerta({ row, onClose }) {
+function DetalheAlerta({ row, onClose, onOpenClient }) {
+  const [nota, setNota] = useState('');
+  const [salvandoNota, setSalvandoNota] = useState(false);
+
+  useEffect(() => {
+    setNota(row?.data?.note || '');
+  }, [row]);
+
   if (!row) return null;
   const kind = KINDS[row.type] || { label: 'Alerta', tone: 'amber' };
   const d = row.data || {};
   const pct = d.percent != null ? `${Math.round(d.percent * 100)}%` : null;
   const names = Array.isArray(d.names) ? d.names : [];
+
+  async function salvarNotaRapida() {
+    if (!d.sessionKey) return;
+    setSalvandoNota(true);
+    try {
+      await api.setNote(d.sessionKey, nota);
+      d.note = nota.trim() || null;
+      Alert.alert('Nota salva', nota.trim() ? `Nota registrada: "${nota.trim()}"` : 'Nota removida.');
+    } catch (err) {
+      Alert.alert('Erro', err?.message || 'Não foi possível salvar a nota');
+    } finally {
+      setSalvandoNota(false);
+    }
+  }
 
   return (
     <Modal visible animationType="slide" transparent onRequestClose={onClose}>
@@ -110,6 +135,7 @@ function DetalheAlerta({ row, onClose }) {
               <Linha label="Porta" value={d.label ? `${d.port} (${d.label})` : String(d.port)} />
             ) : null}
             {d.region ? <Linha label="Região" value={d.region} /> : null}
+            {d.hoursDown != null ? <Linha label="Tempo offline" value={`${d.hoursDown}h`} /> : null}
             {d.count != null && d.total != null ? (
               <Linha label="Caíram" value={`${d.count} de ${d.total} clientes`} />
             ) : null}
@@ -117,6 +143,45 @@ function DetalheAlerta({ row, onClose }) {
             {d.host ? <Linha label="Host do CCR" value={d.host} /> : null}
             {d.onlineCount != null ? <Linha label="Online ao voltar" value={String(d.onlineCount)} /> : null}
             {d.error ? <Linha label="Erro" value={d.error} /> : null}
+
+            {d.sessionKey ? (
+              <>
+                <View style={styles.divisor} />
+                <Text style={styles.dt}>Nota / Observação (opcional)</Text>
+                <TextInput
+                  style={styles.notaInput}
+                  value={nota}
+                  onChangeText={setNota}
+                  placeholder="Ex: Cliente viajou, desligou da tomada..."
+                  placeholderTextColor={colors.inkFaint}
+                />
+                <View style={styles.nomes}>
+                  {['Cliente viajou', 'Desligou da tomada', 'Em manutenção', 'Suspenso'].map((sug) => {
+                    const ativo = nota.trim() === sug;
+                    return (
+                      <Pressable
+                        key={sug}
+                        onPress={() => setNota(ativo ? '' : sug)}
+                        style={[styles.chip, ativo && styles.chipAtivo]}
+                      >
+                        <Text style={[styles.chipText, ativo && styles.chipTextAtivo]}>{sug}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <View style={{ marginTop: 10 }}>
+                  <PrimaryButton
+                    label={salvandoNota ? 'Salvando nota…' : 'Salvar nota'}
+                    onPress={salvarNotaRapida}
+                    disabled={salvandoNota}
+                  />
+                  <PrimaryButton
+                    label="Abrir ficha do cliente"
+                    onPress={() => onOpenClient(d.sessionKey)}
+                  />
+                </View>
+              </>
+            ) : null}
 
             {names.length > 0 ? (
               <>
@@ -139,6 +204,7 @@ function DetalheAlerta({ row, onClose }) {
 }
 
 export default function NotificationsScreen() {
+  const navigation = useNavigation();
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(emptyMeta);
   const [page, setPage] = useState(1);
@@ -224,7 +290,14 @@ export default function NotificationsScreen() {
           ListFooterComponent={<Pager meta={meta} onChange={setPage} />}
         />
       )}
-      <DetalheAlerta row={aberto} onClose={() => setAberto(null)} />
+      <DetalheAlerta
+        row={aberto}
+        onClose={() => setAberto(null)}
+        onOpenClient={(sessionKey) => {
+          setAberto(null);
+          navigation.navigate('ClientDetail', { sessionKey });
+        }}
+      />
     </View>
   );
 }
@@ -282,5 +355,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
+  chipAtivo: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
   chipText: { color: colors.inkSoft, fontSize: 11.5, fontWeight: '600' },
+  chipTextAtivo: { color: '#061024' },
+  notaInput: {
+    backgroundColor: colors.surface2,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    color: colors.ink,
+    fontSize: 13,
+    marginTop: 8,
+  },
 });

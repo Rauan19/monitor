@@ -178,6 +178,8 @@ export const api = {
   },
   setAlias: (sessionKey, alias) =>
     request('/api/clients/alias', { method: 'POST', body: JSON.stringify({ sessionKey, alias }) }),
+  setNote: (sessionKey, note) =>
+    request('/api/clients/note', { method: 'POST', body: JSON.stringify({ sessionKey, note }) }),
   setLocation: (sessionKey, location) =>
     request('/api/clients/location', { method: 'POST', body: JSON.stringify({ sessionKey, ...location }) }),
   setPort: (sessionKey, port) =>

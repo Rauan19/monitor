@@ -45,6 +45,11 @@ function ClientRow({ row, mode, onPress, oltsPorId }) {
             {loc}
           </Text>
         ) : null}
+        {row.note ? (
+          <Text style={styles.tagNote} numberOfLines={1}>
+            📝 {row.note}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.bottom}>
         {online && (row.downBps != null || row.upBps != null) ? (
@@ -79,6 +84,7 @@ export default memo(ClientRow, (antes, depois) => {
     a.session_key === b.session_key &&
     a.is_online === b.is_online &&
     a.alias === b.alias &&
+    a.note === b.note &&
     a.name === b.name &&
     a.address === b.address &&
     a.ont_port === b.ont_port &&
@@ -128,6 +134,16 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: radius.pill,
     maxWidth: 140,
+  },
+  tagNote: {
+    color: colors.amber,
+    backgroundColor: colors.amberBg,
+    fontSize: 11,
+    fontWeight: '650',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    maxWidth: 230,
   },
   bottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   speed: { color: colors.cyan, fontSize: 12, fontFamily: 'monospace' },

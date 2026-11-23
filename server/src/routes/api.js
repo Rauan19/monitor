@@ -45,6 +45,7 @@ import {
   setAlias,
   setClientOlt,
   setLocation,
+  setNote,
   setPort,
   setPortBulk,
   setPortLabel,
@@ -132,6 +133,18 @@ apiRouter.post('/clients/alias', (req, res) => {
     return res.status(400).json({ error: 'Apelido muito longo (máx. 80 caracteres)' });
   }
   const row = setAlias(sessionKey, alias);
+  res.json({ ok: true, ...row });
+});
+
+apiRouter.post('/clients/note', (req, res) => {
+  const { sessionKey, note } = req.body || {};
+  if (!sessionKey || typeof sessionKey !== 'string') {
+    return res.status(400).json({ error: 'sessionKey obrigatório' });
+  }
+  if (typeof note === 'string' && note.length > 240) {
+    return res.status(400).json({ error: 'Nota muito longa (máx. 240 caracteres)' });
+  }
+  const row = setNote(sessionKey, note);
   res.json({ ok: true, ...row });
 });
 

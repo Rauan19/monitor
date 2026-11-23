@@ -5,7 +5,9 @@ import {
   getOlt,
   getPollStatus,
   getRecentDisconnectGroups,
+  listarClientesInativosParaNotificar,
   listPortLabels,
+  marcarClienteInativoNotificado,
   updatePollStatus,
   upsertOnlineSessions,
 } from '../db/index.js';
@@ -165,11 +167,12 @@ export function checkCorrelatedOutages() {
 
   // --- etapa 1: quem acabou de cair entra na fila de observacao ---
   const { byPort, byRegion } = getRecentDisconnectGroups({ minutes: windowMinutes, threshold });
+  const since = new Date(now - windowMinutes * 60 * 1000).toISOString();
 
   const observar = (key, alvo) => {
     if (emObservacao.has(key)) return; // ja esperando, nao reinicia o relogio
     if (now - (outageCooldowns.get(key) || 0) < cooldownMs) return;
-    emObservacao.set(key, { desde: now, ...alvo });
+    emObservacao.set(key, { desde: now, since, ...alvo });
   };
 
   for (const group of byPort) {
@@ -248,6 +251,53 @@ export function checkCorrelatedOutages() {
   }
 }
 
+/**
+ * Notifica quando um cliente completa 48h (2 dias) sem voltar a conectar.
+ * Dispara uma unica vez por ciclo de queda (controlado por inactive_notified_at).
+ */
+export function checkInactiveClients() {
+  const hours = config.inactiveAlertHours || 48;
+  const inativos = listarClientesInativosParaNotificar({ hours });
+  for (const c of inativos) {
+    marcarClienteInativoNotificado(c.session_key);
+    const nome = c.alias || c.name;
+    const msFora = Date.now() - Date.parse(c.disconnected_at);
+    const horasFora = Math.max(hours, Math.round(msFora / 3600000));
+    const diasFora = Math.max(1, Math.floor(horasFora / 24));
+    const onde = [
+      c.olt_name ? `OLT ${c.olt_name}` : null,
+      c.ont_port != null
+        ? c.port_label
+          ? `Porta ${c.ont_port} (${c.port_label})`
+          : `Porta ${c.ont_port}`
+        : null,
+      c.loc_region || null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    enqueueNotification({
+      title: `⏳ Cliente inativo há ${diasFora} dias: ${nome}`,
+      body: `O cliente ${nome}${onde ? ` (${onde})` : ''} está há ${horasFora}h sem voltar a conectar.${c.note ? ` Nota: ${c.note}` : ''}`,
+      data: {
+        type: 'client_inactive',
+        sessionKey: c.session_key,
+        name: nome,
+        pppName: c.name,
+        note: c.note || null,
+        oltId: c.olt_id || null,
+        oltName: c.olt_name || null,
+        port: c.ont_port ?? null,
+        label: c.port_label || null,
+        region: c.loc_region || null,
+        disconnectedAt: c.disconnected_at,
+        hoursDown: horasFora,
+        daysDown: diasFora,
+      },
+    });
+  }
+}
+
 async function tick() {
   if (running) return;
   running = true;
@@ -313,6 +363,11 @@ async function tick() {
         checkCorrelatedOutages();
       } catch (err) {
         console.error('[poller] erro ao checar queda em massa:', err?.message || err);
+      }
+      try {
+        checkInactiveClients();
+      } catch (err) {
+        console.error('[poller] erro ao checar clientes inativos:', err?.message || err);
       }
     }
 

@@ -45,6 +45,7 @@ export default function ClientDetailScreen() {
   const [error, setError] = useState('');
 
   const [alias, setAlias] = useState('');
+  const [note, setNote] = useState('');
   const [region, setRegion] = useState('');
   const [city, setCity] = useState('');
   const [street, setStreet] = useState('');
@@ -66,6 +67,7 @@ export default function ClientDetailScreen() {
       setOlts(oltsRes.olts || []);
       const s = res.session;
       setAlias(s.alias || '');
+      setNote(s.note || '');
       setRegion(s.loc_region || '');
       setCity(s.loc_city || '');
       setStreet(s.loc_street || '');
@@ -155,6 +157,7 @@ export default function ClientDetailScreen() {
     setSaving(true);
     try {
       await api.setAlias(sessionKey, alias);
+      await api.setNote(sessionKey, note);
       // lat/lng vao juntos ou nao vao: o servidor so mexe nas colunas quando
       // recebe os dois, entao mandar um sem o outro nao faria nada. Campo vazio
       // vira null de proposito, pra dar pra apagar uma coordenada errada.
@@ -232,6 +235,7 @@ export default function ClientDetailScreen() {
             {data.live && (
               <KeyValue label="Velocidade agora" value={`${formatBps(data.live.downBps)} / ${formatBps(data.live.upBps)}`} />
             )}
+            {session.note ? <KeyValue label="Nota" value={session.note} /> : null}
           </View>
 
           <Text style={styles.sectionTitle}>Banda (24h)</Text>
@@ -243,6 +247,25 @@ export default function ClientDetailScreen() {
           <View style={styles.card}>
             <Text style={styles.label}>Apelido</Text>
             <TextInput style={styles.input} value={alias} onChangeText={setAlias} placeholder={session.name} placeholderTextColor={colors.inkFaint} />
+
+            <Text style={styles.label}>Nota / Observação (opcional)</Text>
+            <TextInput
+              style={styles.input}
+              value={note}
+              onChangeText={setNote}
+              placeholder="Ex: Cliente viajou, desligou da tomada..."
+              placeholderTextColor={colors.inkFaint}
+            />
+            <View style={[styles.chipRow, { marginTop: 6 }]}>
+              {['Cliente viajou', 'Desligou da tomada', 'Em manutenção', 'Suspenso'].map((sugestao) => (
+                <Chip
+                  key={sugestao}
+                  label={sugestao}
+                  active={note.trim() === sugestao}
+                  onPress={() => setNote(note.trim() === sugestao ? '' : sugestao)}
+                />
+              ))}
+            </View>
 
             <Text style={styles.label}>Região</Text>
             <TextInput style={styles.input} value={region} onChangeText={setRegion} placeholderTextColor={colors.inkFaint} />

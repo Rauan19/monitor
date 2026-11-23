@@ -73,6 +73,11 @@ const EventoRow = memo(function EventoRow({ item, onPress }) {
             {local}
           </Text>
         ) : null}
+        {item.note ? (
+          <Text style={styles.tagNota} numberOfLines={1}>
+            📝 {item.note}
+          </Text>
+        ) : null}
       </View>
 
       <View style={styles.rowRodape}>
@@ -271,6 +276,16 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: radius.pill,
     maxWidth: 170,
+  },
+  tagNota: {
+    color: colors.amber,
+    backgroundColor: colors.amberBg,
+    fontSize: 10.5,
+    fontWeight: '650',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    maxWidth: 220,
   },
   rowRodape: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 9 },
   rowMeta: { color: colors.inkFaint, fontSize: 11.5, fontFamily: 'monospace' },

@@ -40,6 +40,13 @@ export const config = {
     // grupo precisa continuar fora depois desse tempo pra virar notificacao.
     confirmMinutes: Number(process.env.OUTAGE_ALERT_CONFIRM_MINUTES || 5),
   },
+  linkAlert: {
+    // Quanto esperar antes de avisar que uma interface/link do CCR caiu.
+    // Evita push de link piscando (caiu e voltou em menos de 3 minutos).
+    confirmMinutes: Number(process.env.LINK_ALERT_CONFIRM_MINUTES ?? 3),
+  },
+  // Quantas horas sem reconectar ate avisar que um cliente esta inativo (48h = 2 dias).
+  inactiveAlertHours: Number(process.env.INACTIVE_ALERT_HOURS || 48),
   mikrotik: {
     host: process.env.MIKROTIK_HOST || '192.168.88.1',
     port: Number(process.env.MIKROTIK_PORT || 8728),
