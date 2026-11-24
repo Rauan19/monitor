@@ -320,7 +320,78 @@ export function getDb() {
     db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
   }
 
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_lower_name ON sessions(LOWER(TRIM(name)))`);
+  unificarSessoesDuplicadas(db);
+
   return db;
+}
+
+/**
+ * Remove linhas fantasmas offline deixadas quando um mesmo login PPPoE trocou
+ * de roteador ou de MAC (ex: melissakeila|mac_antigo offline enquanto
+ * melissakeila|mac_novo esta online). Copia apelido, nota, porta, OLT e
+ * localizacao da linha antiga para a linha atual antes de apagar a fantasma.
+ */
+function unificarSessoesDuplicadas(database) {
+  const duplicados = database
+    .prepare(
+      `SELECT LOWER(TRIM(name)) AS login
+       FROM sessions
+       GROUP BY LOWER(TRIM(name))
+       HAVING COUNT(*) > 1`
+    )
+    .all();
+  if (!duplicados.length) return;
+
+  const listarPorLogin = database.prepare(
+    `SELECT * FROM sessions
+     WHERE LOWER(TRIM(name)) = ?
+     ORDER BY is_online DESC, last_seen_at DESC`
+  );
+  const atualizarPrincipal = database.prepare(
+    `UPDATE sessions
+     SET alias = COALESCE(alias, ?),
+         note = COALESCE(note, ?),
+         ont_port = COALESCE(ont_port, ?),
+         olt_id = COALESCE(olt_id, ?),
+         loc_region = COALESCE(loc_region, ?),
+         loc_city = COALESCE(loc_city, ?),
+         loc_street = COALESCE(loc_street, ?),
+         loc_neighborhood = COALESCE(loc_neighborhood, ?),
+         lat = COALESCE(lat, ?),
+         lng = COALESCE(lng, ?)
+     WHERE session_key = ?`
+  );
+  const migrarEventos = database.prepare(`UPDATE events SET session_key = ? WHERE session_key = ?`);
+  const apagarSessao = database.prepare(`DELETE FROM sessions WHERE session_key = ?`);
+
+  const tx = database.transaction(() => {
+    for (const { login } of duplicados) {
+      const linhas = listarPorLogin.all(login);
+      if (linhas.length < 2) continue;
+      const principal = linhas[0];
+      for (const antiga of linhas.slice(1)) {
+        // So remove linhas que estao offline (fantasmas de MAC antigo).
+        if (antiga.is_online === 1) continue;
+        atualizarPrincipal.run(
+          antiga.alias,
+          antiga.note,
+          antiga.ont_port,
+          antiga.olt_id,
+          antiga.loc_region,
+          antiga.loc_city,
+          antiga.loc_street,
+          antiga.loc_neighborhood,
+          antiga.lat,
+          antiga.lng,
+          principal.session_key
+        );
+        migrarEventos.run(principal.session_key, antiga.session_key);
+        apagarSessao.run(antiga.session_key);
+      }
+    }
+  });
+  tx();
 }
 
 // ---------------- Links vigiados ----------------
@@ -745,6 +816,20 @@ export function upsertOnlineSessions(clients) {
   const findByKey = database.prepare(
     `SELECT session_key, is_online FROM sessions WHERE session_key = ?`
   );
+  const findByName = database.prepare(
+    `SELECT session_key, is_online FROM sessions
+     WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))
+     ORDER BY is_online ASC, last_seen_at DESC`
+  );
+  const migrateSessionKey = database.prepare(`
+    UPDATE sessions
+    SET session_key = ?, name = ?, address = ?, caller_id = ?, service = ?, uptime = ?, profile = ?,
+        last_seen_at = ?, disconnected_at = NULL, inactive_notified_at = NULL, is_online = 1
+    WHERE session_key = ?
+  `);
+  const migrateEventsKey = database.prepare(`
+    UPDATE events SET session_key = ? WHERE session_key = ?
+  `);
   const insertSession = database.prepare(`
     INSERT INTO sessions (
       session_key, name, address, caller_id, service, uptime, profile,
@@ -779,6 +864,8 @@ export function upsertOnlineSessions(clients) {
     const previous = selectOnline.all();
     const onlineByKey = new Map(previous.map((row) => [row.session_key, row]));
     const previousKeys = new Set(onlineByKey.keys());
+    const allBatchKeys = new Set(list.map((c) => sessionKey(c)));
+    const migratedOldKeys = new Set();
     const currentKeys = new Set();
     const currentByKey = new Map();
 
@@ -811,8 +898,36 @@ export function upsertOnlineSessions(clients) {
 
       const existing = findByKey.get(key);
       if (!existing) {
-        insertSession.run(key, client.name, addr, caller, srv, up, prof, now, now);
-        insertEvent.run(key, client.name, addr, caller, 'connected', now);
+        // Verifica se este mesmo login PPPoE ja existia com outro MAC/IP que nao
+        // esta mais ativo neste lote (troca de roteador/ONU ou MAC da WAN).
+        const candidata = findByName
+          .all(client.name)
+          .find((r) => !allBatchKeys.has(r.session_key) && !migratedOldKeys.has(r.session_key));
+
+        if (candidata) {
+          migratedOldKeys.add(candidata.session_key);
+          migrateSessionKey.run(
+            key,
+            client.name,
+            addr,
+            caller,
+            srv,
+            up,
+            prof,
+            now,
+            candidata.session_key
+          );
+          migrateEventsKey.run(key, candidata.session_key);
+          if (candidata.is_online === 0) {
+            insertEvent.run(key, client.name, addr, caller, 'connected', now);
+          } else {
+            // Estava online no ciclo anterior e so trocou de MAC entre duas leituras
+            previousKeys.add(key);
+          }
+        } else {
+          insertSession.run(key, client.name, addr, caller, srv, up, prof, now, now);
+          insertEvent.run(key, client.name, addr, caller, 'connected', now);
+        }
       } else if (existing.is_online === 0) {
         updateOnline.run(client.name, addr, caller, srv, up, prof, now, key);
         insertEvent.run(key, client.name, addr, caller, 'connected', now);
@@ -822,7 +937,7 @@ export function upsertOnlineSessions(clients) {
     }
 
     for (const row of previous) {
-      if (!currentKeys.has(row.session_key)) {
+      if (!currentKeys.has(row.session_key) && !migratedOldKeys.has(row.session_key)) {
         markOffline.run(now, row.session_key);
         insertEvent.run(
           row.session_key,
@@ -836,7 +951,9 @@ export function upsertOnlineSessions(clients) {
     }
 
     const newlyConnectedKeys = [...currentKeys].filter((key) => !previousKeys.has(key));
-    const newlyDisconnected = previous.filter((row) => !currentKeys.has(row.session_key));
+    const newlyDisconnected = previous.filter(
+      (row) => !currentKeys.has(row.session_key) && !migratedOldKeys.has(row.session_key)
+    );
 
     return {
       onlineCount: currentKeys.size,
@@ -1165,6 +1282,12 @@ export function listarClientesInativosParaNotificar({ hours = 48 } = {}) {
          AND s.disconnected_at IS NOT NULL
          AND s.disconnected_at <= ?
          AND s.inactive_notified_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM sessions s2
+           WHERE LOWER(TRIM(s2.name)) = LOWER(TRIM(s.name))
+             AND s2.session_key != s.session_key
+             AND (s2.is_online = 1 OR s2.disconnected_at > s.disconnected_at)
+         )
        ORDER BY s.disconnected_at ASC`
     )
     .all(corte);

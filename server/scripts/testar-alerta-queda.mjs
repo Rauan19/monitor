@@ -143,6 +143,18 @@ checkInactiveClients();
 await esperar(200);
 conferir('nao repete notificacao do mesmo cliente inativo', pushes(), 1);
 
+// --- Cenario 6b: cliente que trocou de MAC/roteador NAO gera linha fantasma offline ---
+db.prepare(`DELETE FROM notifications`).run();
+// ana reconecta com um MAC novo (troca de roteador na casa do cliente)
+upsertOnlineSessions([
+  { name: 'ana', callerId: 'AA:BB:CC:DD:EE:99', address: '10.0.0.99', uptime: '5m' },
+]);
+const linhasAna = db.prepare(`SELECT session_key, is_online, ont_port, note FROM sessions WHERE name = 'ana'`).all();
+conferir('troca de MAC mantem 1 unica linha pro cliente (sem fantasma offline)', linhasAna.length, 1);
+conferir('cliente com MAC novo fica online', linhasAna[0]?.is_online, 1);
+conferir('troca de MAC preserva a porta cadastrada', linhasAna[0]?.ont_port, 5);
+conferir('troca de MAC preserva a nota do cliente', linhasAna[0]?.note, 'Cliente viajou');
+
 // --- Cenario 7: link de transporte espera confirmacao (3 min) antes de alertar ---
 db.prepare(`DELETE FROM notifications`).run();
 resetLinkState();
